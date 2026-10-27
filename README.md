@@ -94,6 +94,22 @@ One button: **Generate scene**.
 5. The caption goes to comfy-studio. The image is **attached to the last message as
    media** — no new turn, nothing auto-sent, so no LLM reply is triggered.
 
+### Three ways to fire it
+
+| Where | What |
+|---|---|
+| **Magic wand** (the menu next to the chat input) → *Illustrate this message* | Fastest. No panel, no typing. |
+| `/illustrate` slash command | Same thing from the keyboard or a quick reply. |
+| **Generate scene** in the extension panel | Same thing, with the caption preview in front of you. |
+
+All three capture **the message id at the moment you click**. You can keep
+roleplaying while the image renders: new replies arriving mid-job do not steal
+the image — it is attached to the message you asked about, not to the newest one.
+
+If the LLM answers with **nothing** (provider hiccup, empty completion, filter),
+the extension does not fail: it falls back to using the last message's own text as
+the prompt, tells you so in a toast, and still renders.
+
 **↻ regenerate caption** re-runs only the caption step when the JSON came out wrong —
 no render is wasted.
 

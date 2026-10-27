@@ -122,6 +122,7 @@
         captionVia: '',
         captionNegative: '',
         captionScene: '',
+        targetMesId: null,
     };
 
     /* ------------------------------------------------------------------ */
@@ -861,9 +862,10 @@
         const personaName = (ctx && ctx.name1) ? ctx.name1 : 'the user';
 
         let last = null;
+        let lastIndex = -1;
         for (let i = chat.length - 1; i >= 0; i -= 1) {
             const m = chat[i];
-            if (m && m.mes && String(m.mes).trim()) { last = m; break; }
+            if (m && m.mes && String(m.mes).trim()) { last = m; lastIndex = i; break; }
         }
         const speaker = last ? (last.is_user ? personaName : charName) : '';
         const lastText = last ? stripHtml(last.mes) : '';
@@ -874,7 +876,7 @@ SCENE (illustrate exactly this moment):
 ${lastText}`
             : 'SCENE: (the last message is empty)';
 
-        return { charName, personaName, speaker, lastText, userPayload };
+        return { charName, personaName, speaker, lastText, lastIndex, userPayload };
     }
 
     /**
@@ -1178,10 +1180,18 @@ ${lastText}`
      * ONE-BUTTON path. Builds the caption from the chat with the LLM, then
      * generates and (if autoInsert) attaches the image. No typing.
      */
-    async function generateScene() {
+    async function generateScene(explicitMesId) {
         if (ui.busy) return;
         syncSettingsFromForm();
         setError('');
+
+        const scene = gatherSceneContext();
+        // Remember WHICH message we are illustrating. The chat may grow while
+        // the image renders; the result must land on this one, not on the last.
+        ui.targetMesId = (explicitMesId != null && Number.isFinite(Number(explicitMesId)))
+            ? Number(explicitMesId)
+            : scene.lastIndex;
+        ui.targetMesText = scene.lastText;
 
         let caption = ui.captionOverride;
         ui.captionOverride = null;
@@ -1193,12 +1203,24 @@ ${lastText}`
                 caption = await buildSceneCaption();
             } catch (err) {
                 const msg = (err && err.message) ? err.message : String(err);
-                setError('ST couldn\'t run a quiet prompt; falling back to manual prompt. ' + msg);
-                setStatusLine('caption failed — use Advanced');
-                setBusy(false);
-                openAdvanced();
-                toast('error', 'Caption failed: ' + msg);
-                return;
+                // The LLM answering with nothing is common (provider hiccup,
+                // filter, empty completion). Illustration must not die for that:
+                // fall back to the message text itself as the prompt.
+                const fromMessage = sanitizeCaption(scene.lastText);
+                if (fromMessage) {
+                    caption = fromMessage;
+                    ui.captionVia = 'fallback: last message text';
+                    ui.captionNegative = '';
+                    setStatusLine('LLM gave no caption — using the message text');
+                    toast('warning', 'No caption from the LLM (' + msg + ') — using the message text.');
+                } else {
+                    setError("ST couldn't run a quiet prompt and the message is empty. " + msg);
+                    setStatusLine('caption failed — use Advanced');
+                    setBusy(false);
+                    openAdvanced();
+                    toast('error', 'Caption failed: ' + msg);
+                    return;
+                }
             }
             showCaptionPreview(caption, ui.captionVia);
             if ($('csc_prompt')) { $('csc_prompt').value = caption; autoGrow($('csc_prompt')); }
@@ -1338,7 +1360,7 @@ ${lastText}`
 
         const s = getSettings();
         if (s.autoInsert !== false) {
-            attachImageToLastMessage(rel).then((where) => {
+            attachImageToLastMessage(rel, ui.targetMesId).then((where) => {
                 if (where === 'media') toast('success', 'Image added to the last chat message.');
                 else if (where === 'textarea') toast('info', 'Image inserted into the chat input — press send if you want it in a message.');
             }).catch((err) => {
@@ -1379,7 +1401,7 @@ ${lastText}`
      *
      * @returns {Promise<'media'|'textarea'|'none'>}
      */
-    async function attachImageToLastMessage(rel) {
+    async function attachImageToLastMessage(rel, mesId) {
         if (rel == null) rel = ui.imageRel;
         if (!rel) return 'none';
         const abs = absoluteUrl(rel);
@@ -1387,7 +1409,10 @@ ${lastText}`
 
         if (ctx && Array.isArray(ctx.chat) && ctx.chat.length > 0 && typeof ctx.ensureMessageMediaIsArray === 'function') {
             try {
-                const idx = ctx.chat.length - 1;
+                // Attach to the message the user asked about, not to whatever
+                // happens to be last now: they keep roleplaying while it renders.
+                const wanted = (mesId != null && Number.isFinite(Number(mesId))) ? Number(mesId) : null;
+                let idx = (wanted != null && wanted >= 0 && wanted < ctx.chat.length) ? wanted : ctx.chat.length - 1;
                 const mes = ctx.chat[idx];
                 if (!mes) return 'none';
                 if (!mes.extra || typeof mes.extra !== 'object') mes.extra = {};
@@ -1592,6 +1617,88 @@ ${lastText}`
     /* Wiring                                                              */
     /* ------------------------------------------------------------------ */
 
+    /* ------------------------------------------------------------------ */
+    /* Magic-wand entry point                                              */
+    /* ------------------------------------------------------------------ */
+
+    function lastMessageIndex() {
+        const ctx = getST();
+        const chat = (ctx && Array.isArray(ctx.chat)) ? ctx.chat : [];
+        for (let i = chat.length - 1; i >= 0; i -= 1) {
+            const m = chat[i];
+            if (m && m.mes && String(m.mes).trim()) return i;
+        }
+        return -1;
+    }
+
+    /**
+     * Adds "Illustrate this message" to SillyTavern's magic-wand menu so the
+     * panel never has to be opened. The click captures the message id at that
+     * moment, so the image lands there even if the user keeps roleplaying.
+     */
+    function addWandMenuItem() {
+        const menu = document.getElementById('extensionsMenu') || document.getElementById('extensions_menu');
+        if (!menu) return false;
+        if (menu.querySelector('.csc-wand-item')) return true;
+        try {
+            const item = document.createElement('div');
+            item.className = 'list-group-item csc-wand-item flex-container flexGap5 interactable';
+            item.tabIndex = 0;
+            item.title = 'Illustrate the last message with comfy-studio';
+            const icon = document.createElement('i');
+            icon.className = 'fa-solid fa-wand-magic-sparkles';
+            const label = document.createElement('span');
+            label.textContent = 'Illustrate this message';
+            item.appendChild(icon);
+            item.appendChild(label);
+            const run = (ev) => {
+                if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+                try { document.body.click(); } catch (e) { /* close the menu */ }
+                const idx = lastMessageIndex();
+                generateScene(idx).catch((err) => toast('error', (err && err.message) ? err.message : String(err)));
+            };
+            item.addEventListener('click', run);
+            item.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') run(ev); });
+            menu.appendChild(item);
+            return true;
+        } catch (err) {
+            console.warn(LOG, 'could not add the wand entry', err);
+            return false;
+        }
+    }
+
+    /** Same action as a slash command, for keyboards and quick replies. */
+    function registerSlashCommand() {
+        const ctx = getST();
+        const parser = ctx && ctx.SlashCommandParser;
+        if (!parser || typeof parser.addCommandObject !== 'function') return;
+        try {
+            const props = {
+                name: 'illustrate',
+                helpString: 'Illustrate the last chat message with comfy-studio (no typing).',
+                callback: async () => { await generateScene(lastMessageIndex()); return ''; },
+                returns: '',
+            };
+            const cmd = (typeof ctx.SlashCommand !== 'undefined' && ctx.SlashCommand && typeof ctx.SlashCommand.fromProps === 'function')
+                ? ctx.SlashCommand.fromProps(props)
+                : props;
+            parser.addCommandObject(cmd);
+        } catch (err) {
+            console.warn(LOG, 'slash command not registered', err);
+        }
+    }
+
+    /** ST may rebuild the wand menu; put our entry back when it does. */
+    function watchWandMenu() {
+        addWandMenuItem();
+        try {
+            const obs = new MutationObserver(() => {
+                if (!document.querySelector('.csc-wand-item')) addWandMenuItem();
+            });
+            obs.observe(document.body, { childList: true, subtree: true });
+        } catch (err) { /* ignore */ }
+    }
+
     function openAdvanced() {
         const adv = $('csc_advanced');
         if (adv && typeof adv.open !== 'undefined') adv.open = true;
@@ -1767,7 +1874,9 @@ ${lastText}`
     }
 
     function init() {
-            ensurePill();
+        ensurePill();
+        watchWandMenu();
+        registerSlashCommand();
             const ctx = getST();
         if (ctx) {
             getSettings();
@@ -1798,6 +1907,8 @@ ${lastText}`
         syncFormFromSettings,
         pullContext,
         insertIntoChat,
+        addWandMenuItem,
+        lastMessageIndex,
         absoluteUrl,
         getSettings,
                 CAPTION_SYSTEM_PROMPT,
