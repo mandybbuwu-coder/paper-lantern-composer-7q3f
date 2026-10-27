@@ -478,42 +478,137 @@
 .csc-pill {
     position: fixed;
     left: 50%;
+    top: 10px;              /* overridden inline: pinned to the chat area's top */
     transform: translateX(-50%);
-    bottom: 96px; /* overridden inline with the #send_form height + 8px */
     z-index: 2147483000;
     pointer-events: none;
     box-sizing: border-box;
-    max-width: min(92vw, 460px);
-    padding: 8px 16px;
-    border-radius: 999px;
-    text-align: center;
+    width: min(88vw, 340px);
+    max-width: min(88vw, 340px);
+    padding: 7px 12px 8px;
+    border-radius: 12px;
+    text-align: left;
     font-family: inherit;
-    color: var(--SmartThemeBodyColor, #e8e2d8);
-    background: var(--SmartThemeBlurTintColor, #221e1a);
-    border: 1px solid var(--SmartThemeBorderColor, #4a3f33);
-    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+    color: var(--SmartThemeBodyColor, #f2ece2);
+    background: rgba(18, 15, 12, 0.88);
+    border: 1px solid var(--SmartThemeBorderColor, #6b5842);
+    box-shadow: 0 6px 22px rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(6px);
     opacity: 0.97;
+    line-height: 1.3;
 }
 
 .csc-pill[hidden] {
     display: none;
 }
 
+.csc-pill-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
 .csc-pill-phase {
-    font-size: 0.95em;
+    flex: 1 1 auto;
+    font-size: 0.84em;
     font-weight: 600;
-    line-height: 1.25;
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.csc-pill-cancel {
+    pointer-events: auto;      /* only the ✕ is clickable */
+    flex: 0 0 auto;
+    appearance: none;
+    background: transparent;
+    border: 0;
+    padding: 0 2px;
+    margin: 0;
+    font: inherit;
+    font-size: 0.9em;
+    line-height: 1;
+    color: inherit;
+    opacity: 0.55;
+    cursor: pointer;
+}
+
+.csc-pill-cancel:hover,
+.csc-pill-cancel:active {
+    opacity: 1;
+}
+
+.csc-pill-track {
+    margin-top: 5px;
+    height: 3px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.14);
+    overflow: hidden;
+}
+
+.csc-pill-fill {
+    display: block;
+    width: 0;
+    height: 100%;
+    border-radius: 999px;
+    background: var(--SmartThemeQuoteColor, #d8a55a);
+    transition: width 220ms linear;
+}
+
+/* Caption step: no honest percentage yet, so the bar sweeps. */
+.csc-pill.csc-pill-waiting .csc-pill-fill {
+    width: 40% !important;
+    animation: csc-pill-sweep 1.15s ease-in-out infinite;
+}
+
+@keyframes csc-pill-sweep {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(260%); }
+}
+
+.csc-pill.csc-pill-error {
+    border-color: #a4463c;
+    background: rgba(48, 14, 11, 0.92);
 }
 
 .csc-pill-detail {
-    margin-top: 1px;
-    font-size: 0.76em;
-    opacity: 0.8;
-    line-height: 1.2;
+    margin-top: 3px;
+    font-size: 0.72em;
+    opacity: 0.75;
+    line-height: 1.25;
     word-break: break-word;
 }
 
 .csc-pill-detail:empty {
     display: none;
+}
+
+/* LLM diagnostics (test LLM button) ---------------------------------- */
+
+.csc-diag {
+    margin-top: 6px;
+    padding: 6px 8px;
+    border: 1px solid var(--SmartThemeBorderColor, #4a3f33);
+    border-radius: 6px;
+    font-size: 0.72em;
+    line-height: 1.35;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    word-break: break-word;
+}
+
+.csc-diag-row {
+    padding: 1px 0;
+}
+
+.csc-diag-ok {
+    color: #7fbf7f;
+}
+
+.csc-diag-fail {
+    color: #e08b7f;
+}
+
+.csc-mt-xs {
+    margin-top: 3px;
 }

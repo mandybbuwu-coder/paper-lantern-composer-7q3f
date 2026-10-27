@@ -303,9 +303,14 @@
         <button id="csc_generate_scene" class="menu_button csc-btn-hero">✦ Generate scene</button>
         <div class="csc-hero-hint">Builds the prompt from this chat with your LLM, then generates and adds the image. No typing.</div>
         <div class="csc-row csc-row-between csc-mt-sm">
-          <button id="csc_regenerate_caption" class="csc-linklike" title="Re-run only the caption step (does not spend a render)">↻ regenerate caption</button>
-          <span id="csc_caption_via" class="csc-muted csc-caption-via"></span>
-        </div>
+                  <button id="csc_regenerate_caption" class="csc-linklike" title="Re-run only the caption step (does not spend a render)">↻ regenerate caption</button>
+                  <span id="csc_caption_via" class="csc-muted csc-caption-via"></span>
+                </div>
+                <div class="csc-row csc-row-between csc-mt-xs">
+                  <button id="csc_test_llm" class="csc-linklike" title="Try every LLM path and show what each one answered (no image is rendered)">⚡ test LLM</button>
+                  <button id="csc_test_overlay" class="csc-linklike" title="Pin the chat overlay for 8s so you can see what it looks like">◉ show overlay</button>
+                </div>
+                <div id="csc_llm_diag" class="csc-diag" hidden></div>
         <div id="csc_caption_wrap" class="csc-caption-wrap" hidden>
           <div class="csc-label csc-caption-label">Prompt used</div>
           <div id="csc_caption_preview" class="csc-caption-preview"></div>
@@ -543,65 +548,164 @@
         };
 
         /**
-         * Create the pill once, on document.body (NOT inside the settings panel),
-         * so it survives the drawer being closed. role="status" + aria-live for
-         * screen readers; pointer-events:none so it never blocks the chat input.
-         */
-        function ensurePill() {
-            if (document.getElementById(PILL_ID)) {
-                pill.el = document.getElementById(PILL_ID);
-                pill.phaseEl = document.getElementById('csc_pill_phase');
-                pill.detailEl = document.getElementById('csc_pill_detail');
-                return pill.el;
-            }
-            const el = document.createElement('div');
-            el.id = PILL_ID;
-            el.className = 'csc-pill';
-            el.setAttribute('role', 'status');
-            el.setAttribute('aria-live', 'polite');
-            el.hidden = true;
-            el.innerHTML = '<div id="csc_pill_phase" class="csc-pill-phase"></div><div id="csc_pill_detail" class="csc-pill-detail"></div>';
-            (document.body || document.documentElement).appendChild(el);
-            pill.el = el;
-            pill.phaseEl = document.getElementById('csc_pill_phase');
-            pill.detailEl = document.getElementById('csc_pill_detail');
-            return el;
-        }
-
-        /** Anchor the pill just above ST's chat form (#send_form), fallback 96px. */
-        function positionPill() {
-            const el = pill.el;
-            if (!el) return;
-            const form = document.getElementById('send_form');
-            let offset = 96;
-            try {
-                if (form && form.getBoundingClientRect) {
-                    const rect = form.getBoundingClientRect();
-                    if (rect.height > 0) offset = Math.round(rect.height + 8);
+                 * Create the overlay once, on document.body (NOT inside the settings
+                 * panel), so it survives the drawer being closed and ST re-rendering the
+                 * chat. role="status" + aria-live for screen readers; pointer-events:none
+                 * so it never blocks the chat — only the ✕ takes clicks.
+                 */
+                function ensurePill() {
+                    const existing = document.getElementById(PILL_ID);
+                    if (existing) {
+                        pill.el = existing;
+                        pill.phaseEl = document.getElementById('csc_pill_phase');
+                        pill.detailEl = document.getElementById('csc_pill_detail');
+                        pill.fillEl = document.getElementById('csc_pill_fill');
+                        return existing;
+                    }
+                    const el = document.createElement('div');
+                    el.id = PILL_ID;
+                    el.className = 'csc-pill';
+                    el.setAttribute('role', 'status');
+                    el.setAttribute('aria-live', 'polite');
+                    el.hidden = true;
+                    el.innerHTML = [
+                        '<div class="csc-pill-main">',
+                        '<span id="csc_pill_phase" class="csc-pill-phase"></span>',
+                        '<button id="csc_pill_cancel" class="csc-pill-cancel" type="button"',
+                        ' title="Cancel this generation" aria-label="Cancel generation">✕</button>',
+                        '</div>',
+                        '<div class="csc-pill-track"><i id="csc_pill_fill" class="csc-pill-fill"></i></div>',
+                        '<div id="csc_pill_detail" class="csc-pill-detail"></div>',
+                    ].join('');
+                    (document.body || document.documentElement).appendChild(el);
+                    pill.el = el;
+                    pill.phaseEl = document.getElementById('csc_pill_phase');
+                    pill.detailEl = document.getElementById('csc_pill_detail');
+                    pill.fillEl = document.getElementById('csc_pill_fill');
+                    const cancel = document.getElementById('csc_pill_cancel');
+                    if (cancel) {
+                        cancel.addEventListener('click', (ev) => {
+                            ev.preventDefault();
+                            ev.stopPropagation();
+                            interrupt();
+                        });
+                    }
+                    return el;
                 }
-            } catch (err) { /* ignore */ }
-            el.style.bottom = offset + 'px';
-        }
 
-        function showPill() {
-            ensurePill();
-            positionPill();
-            if (pill.el) pill.el.hidden = false;
-            if (pill.hideTimer) { clearTimeout(pill.hideTimer); pill.hideTimer = null; }
-        }
+                /**
+                 * Anchor the overlay to the TOP-CENTER of the chat area. The old version
+                 * sat just above #send_form: on a phone that strip is behind the keyboard
+                 * and the browser toolbar, so the element existed and was "visible" in the
+                 * DOM while never actually being on screen. The top of the chat is the one
+                 * place that is always inside the visible viewport on every device.
+                 */
+                function positionPill() {
+                            const el = pill.el;
+                            if (!el) return;
+                            const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+                            const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+                            let left = Math.round(vw / 2);
+                            let top = 10;
+                            const host = document.getElementById('chat') || document.getElementById('hx_chat');
+                            if (host && host.getBoundingClientRect) {
+                                const r = host.getBoundingClientRect();
+                                // Use the chat only when it is actually on screen; a chat that has
+                                // scrolled out of the viewport must not drag the overlay with it.
+                                if (r.width > 60 && r.height > 40 && r.top < vh - 40) {
+                                    left = Math.round(r.left + r.width / 2);
+                                    top = Math.round(Math.max(6, r.top + 8));
+                                }
+                            }
+                            // Never let the overlay leave the screen, whatever the layout does.
+                            if (vh > 120) top = Math.min(top, vh - 90);
+                            el.style.left = Math.max(8, Math.min(left, vw - 8)) + 'px';
+                            el.style.top = Math.max(4, top) + 'px';
+                            el.style.bottom = 'auto';
+                            el.style.transform = 'translateX(-50%)';
+                        }
 
-        function hidePill() {
-            if (pill.hideTimer) { clearTimeout(pill.hideTimer); pill.hideTimer = null; }
-            stopPillTicker();
-            if (pill.el) pill.el.hidden = true;
-        }
+                /** Keep the overlay glued to the chat when the layout moves under it. */
+                function bindPillPositioning() {
+                    if (pill.bound) return;
+                    pill.bound = true;
+                    const redo = () => { if (pill.el && !pill.el.hidden) positionPill(); };
+                    window.addEventListener('resize', redo, { passive: true });
+                    window.addEventListener('orientationchange', redo, { passive: true });
+                    const chatEl = document.getElementById('chat');
+                    if (chatEl && chatEl.addEventListener) chatEl.addEventListener('scroll', redo, { passive: true });
+                    if (typeof ResizeObserver === 'function') {
+                        try {
+                            const ro = new ResizeObserver(redo);
+                            if (chatEl) ro.observe(chatEl);
+                            ro.observe(document.documentElement);
+                            pill.observer = ro;
+                        } catch (err) { /* ignore */ }
+                    }
+                }
 
-        function setPill(phaseLabel, pct, detail) {
-            ensurePill();
-            const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
-            if (pill.phaseEl) pill.phaseEl.textContent = `${phaseLabel}… ${p}%`;
-            if (pill.detailEl) pill.detailEl.textContent = detail || '';
-        }
+                function showPill() {
+                    ensurePill();
+                    bindPillPositioning();
+                    positionPill();
+                    if (pill.el) pill.el.hidden = false;
+                    if (pill.hideTimer) { clearTimeout(pill.hideTimer); pill.hideTimer = null; }
+                    // The chat element may still be settling on a fresh load.
+                    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(positionPill);
+                }
+
+                function hidePill() {
+                                    if (pill.hideTimer) { clearTimeout(pill.hideTimer); pill.hideTimer = null; }
+                                    if (pill.demoTimer) { clearTimeout(pill.demoTimer); pill.demoTimer = null; }
+                                    stopPillTicker();
+                                    if (pill.el) pill.el.hidden = true;
+                                }
+
+                                /**
+                                 * Panel test hook: pin the overlay for a few seconds with a fake
+                                 * ramp, so the user can confirm it actually draws on THEIR device
+                                 * (and not just in the desktop harness) without spending a render.
+                                 */
+                                function pillDemo() {
+                                    pill.indeterminate = false;
+                                    pill.jobStartedAt = Date.now();
+                                    pill.lastJob = null;
+                                    showPill();
+                                    let p = 0;
+                                    if (pill.demoTimer) { clearTimeout(pill.demoTimer); pill.demoTimer = null; }
+                                    const step = () => {
+                                        if (!pill.el || pill.el.hidden) return;
+                                        p = Math.min(96, p + 3);
+                                        setPill('Overlay test', p, 'preview only — nothing is rendering');
+                                        if (p < 96) {
+                                            pill.demoTimer = setTimeout(step, 180);
+                                        } else {
+                                            setPill('Overlay test', 100, 'this is where the % will be');
+                                            pill.demoTimer = setTimeout(() => hidePill(), 1500);
+                                        }
+                                    };
+                                    step();
+                                }
+
+                function setPill(phaseLabel, pct, detail) {
+                    ensurePill();
+                    const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+                    if (pill.phaseEl) pill.phaseEl.textContent = `${phaseLabel}… ${p}%`;
+                    if (pill.fillEl) pill.fillEl.style.width = p + '%';
+                    if (pill.detailEl) pill.detailEl.textContent = detail || '';
+                    if (pill.el) pill.el.classList.toggle('csc-pill-waiting', !!pill.indeterminate);
+                }
+
+                /**
+                 * Shown while the caption is being built, before any render is queued.
+                 * The bar sweeps instead of pretending to know a percentage.
+                 */
+                function pillBusyStart(label, detail) {
+                    pill.indeterminate = true;
+                    pill.jobStartedAt = Date.now();
+                    showPill();
+                    setPill(label || 'Building prompt', 0, detail || 'asking your LLM');
+                }
 
         /**
          * HONEST progress mapping. /api/job `progress` is the sampling fraction,
@@ -649,34 +753,41 @@
         }
 
         function pillJobStarted() {
-            pill.jobStartedAt = Date.now();
-            pill.lastJob = { status: 'queued', progress: 0 };
-            showPill();
-            renderPillFromJob(pill.lastJob);
-            startPillTicker();
-        }
+                    pill.indeterminate = false;
+                    pill.jobStartedAt = Date.now();
+                    pill.lastJob = { status: 'queued', progress: 0 };
+                    showPill();
+                    renderPillFromJob(pill.lastJob);
+                    startPillTicker();
+                }
 
-        function pillJobErrored(errorText) {
-            stopPillTicker();
-            ensurePill();
-            positionPill();
-            if (pill.el) pill.el.hidden = false;
-            if (pill.phaseEl) pill.phaseEl.textContent = 'Generation failed';
-            if (pill.detailEl) pill.detailEl.textContent = String(errorText || 'error');
-            if (pill.hideTimer) clearTimeout(pill.hideTimer);
-            pill.hideTimer = setTimeout(() => hidePill(), 6000);
-        }
+                function pillJobErrored(errorText) {
+                    stopPillTicker();
+                    pill.indeterminate = false;
+                    ensurePill();
+                    positionPill();
+                    if (pill.el) { pill.el.hidden = false; pill.el.classList.add('csc-pill-error'); }
+                    if (pill.phaseEl) pill.phaseEl.textContent = 'Generation failed';
+                    if (pill.detailEl) pill.detailEl.textContent = String(errorText || 'error');
+                    if (pill.hideTimer) clearTimeout(pill.hideTimer);
+                    pill.hideTimer = setTimeout(() => hidePill(), 9000);
+                }
 
-        function pillJobDone() {
-            stopPillTicker();
-            ensurePill();
-            positionPill();
-            if (pill.el) pill.el.hidden = false;
-            if (pill.phaseEl) pill.phaseEl.textContent = 'Ready';
-            if (pill.detailEl) pill.detailEl.textContent = '';
-            if (pill.hideTimer) clearTimeout(pill.hideTimer);
-            pill.hideTimer = setTimeout(() => hidePill(), 1500);
-        }
+                function pillJobDone() {
+                    stopPillTicker();
+                    pill.indeterminate = false;
+                    ensurePill();
+                    positionPill();
+                    if (pill.el) {
+                        pill.el.hidden = false;
+                        pill.el.classList.remove('csc-pill-error');
+                    }
+                    if (pill.phaseEl) pill.phaseEl.textContent = 'Ready… 100%';
+                    if (pill.fillEl) pill.fillEl.style.width = '100%';
+                    if (pill.detailEl) pill.detailEl.textContent = '';
+                    if (pill.hideTimer) clearTimeout(pill.hideTimer);
+                    pill.hideTimer = setTimeout(() => hidePill(), 2500);
+                }
 
     function showCaptionPreview(caption, via) {
         ui.lastCaption = caption || '';
@@ -693,87 +804,194 @@
     /* ------------------------------------------------------------------ */
 
     /**
-     * Run a hidden completion with SillyTavern's own configured LLM.
-     * Fallback chain, most-preferred first:
-     *   1. getContext().generateQuietPrompt   (st-context.js:204, script.js:3084)
-     *   2. global generateQuietPrompt          (same function, if exported globally)
-     *   3. POST /api/backends/chat-completions/generate with getRequestHeaders
-     * Returns { text, via }.
-     */
-    async function quietCaption(systemPrompt, userText) {
-        const ctx = getST();
-        const composed = systemPrompt + '\n\n' + userText;
+         * Run a hidden completion with SillyTavern's own configured LLM.
+         *
+         * Every path is attempted in order and a FAILING path must never abort the
+         * chain: v1.3 threw on the first empty reply, which is exactly the
+         * "generateQuietPrompt returned empty reply" error seen on the phone even
+         * though three other paths were sitting there unused.
+         *
+         * Order, most-preferred first:
+         *   1. getContext().generateQuietPrompt          (script.js:3084)
+         *   2. the same call with removeReasoning:false  — reasoning-only models put
+         *      the whole answer inside the thinking block, and #1 strips it, so #1
+         *      legitimately returns '' on those models
+         *   3. getContext().generateRaw                  (script.js:4122) — no chat
+         *      history / character card, so a blown context cannot kill it
+         *   4. POST /api/backends/chat-completions/generate (ST's own endpoint)
+         *
+         * Returns { text, via }. ui.llmDiag keeps one row per attempt so the panel
+         * can show WHY each path failed without a console.
+         */
+        function diagRow(path, ok, detail) {
+            if (!Array.isArray(ui.llmDiag)) ui.llmDiag = [];
+            ui.llmDiag.push({ path, ok, detail: String(detail == null ? '' : detail).slice(0, 240) });
+        }
 
-        if (ctx && typeof ctx.generateQuietPrompt === 'function') {
-            const reply = await ctx.generateQuietPrompt({ quietPrompt: composed, quietName: 'image caption', removeReasoning: true });
-            if (reply && String(reply).trim()) {
-                return { text: String(reply), via: 'generateQuietPrompt' };
+        function diagSummary() {
+            const rows = Array.isArray(ui.llmDiag) ? ui.llmDiag : [];
+            return rows.map((r) => `${r.path}: ${r.ok ? 'ok' : r.detail}`).join(' | ');
+        }
+
+        /** Run one LLM path. Returns its text, or null when it was empty or threw. */
+        async function llmStep(path, fn) {
+            const started = Date.now();
+            try {
+                const raw = await fn();
+                const text = (raw && typeof raw === 'object')
+                    ? String(raw.text || '')
+                    : (raw == null ? '' : String(raw));
+                const ms = Date.now() - started;
+                if (!text.trim()) {
+                    diagRow(path, false, `empty reply (${ms} ms)`);
+                    return null;
+                }
+                diagRow(path, true, `${text.trim().length} chars (${ms} ms)`);
+                return text;
+            } catch (err) {
+                const msg = (err && err.message) ? err.message : String(err);
+                diagRow(path, false, msg);
+                console.warn(LOG, 'LLM path failed:', path, msg);
+                return null;
             }
-            throw new Error('ST generateQuietPrompt returned an empty reply.');
         }
 
-        const g = (typeof window.generateQuietPrompt === 'function') ? window.generateQuietPrompt : null;
-        if (g) {
-            const reply = await g({ quietPrompt: composed });
-            if (reply && String(reply).trim()) {
-                return { text: String(reply), via: 'generateQuietPrompt (global)' };
+        async function quietCaption(systemPrompt, userText) {
+            const ctx = getST();
+            const composed = systemPrompt + '\n\n' + userText;
+            ui.llmDiag = [];
+
+            if (ctx && typeof ctx.generateQuietPrompt === 'function') {
+                let text = await llmStep('quiet prompt', () => ctx.generateQuietPrompt({
+                    quietPrompt: composed, quietName: 'image caption', removeReasoning: true,
+                }));
+                if (text) return { text, via: 'ST quiet prompt' };
+                text = await llmStep('quiet prompt (reasoning kept)', () => ctx.generateQuietPrompt({
+                    quietPrompt: composed, quietName: 'image caption', removeReasoning: false,
+                }));
+                if (text) return { text, via: 'ST quiet prompt (reasoning kept)' };
             }
-            throw new Error('global generateQuietPrompt returned an empty reply.');
+
+            if (typeof window.generateQuietPrompt === 'function'
+                && (!ctx || window.generateQuietPrompt !== ctx.generateQuietPrompt)) {
+                const text = await llmStep('global generateQuietPrompt', () => window.generateQuietPrompt({ quietPrompt: composed }));
+                if (text) return { text, via: 'global generateQuietPrompt' };
+            }
+
+            if (ctx && typeof ctx.generateRaw === 'function') {
+                const text = await llmStep('raw generation', () => ctx.generateRaw({
+                    prompt: userText, systemPrompt, responseLength: 240,
+                }));
+                if (text) return { text, via: 'ST raw generation' };
+            }
+
+            const text = await llmStep('chat-completions endpoint', () => backendCaption(ctx, systemPrompt, userText));
+            if (text) return { text, via: 'chat-completions endpoint' };
+
+            throw new Error('no LLM path produced an answer — ' + diagSummary());
         }
 
-        return await backendCaption(ctx, systemPrompt, userText);
-    }
+        /**
+         * Last resort: POST ST's own chat-completions endpoint. The body is built
+         * from the LIVE chat-completion settings, because that is exactly what ST
+         * itself spreads into this request (openai.js createGenerationParameters),
+         * so reverse proxies, custom URLs, Azure, Claude, OpenRouter and DeepSeek
+         * keep working. Only the fields describing THIS call are overridden.
+         */
+        async function backendCaption(ctx, systemPrompt, userText) {
+            if (!ctx || typeof ctx.getRequestHeaders !== 'function') {
+                throw new Error('getContext().getRequestHeaders is missing.');
+            }
+            const settings = (ctx.chatCompletionSettings && typeof ctx.chatCompletionSettings === 'object')
+                ? ctx.chatCompletionSettings : {};
+            let model = '';
+            try {
+                if (typeof ctx.getChatCompletionModel === 'function') model = ctx.getChatCompletionModel();
+            } catch (err) { /* ignore */ }
 
-    /**
-     * Last-resort path: call ST's own chat-completions backend endpoint with
-     * the same payload shape ST builds (system + user messages), using
-     * getRequestHeaders() so the CSRF token and API keys stay server-side.
-     */
-    async function backendCaption(ctx, systemPrompt, userText) {
-        if (!ctx || typeof ctx.getRequestHeaders !== 'function') {
-            throw new Error('No LLM path available (getContext/generateQuietPrompt missing).');
-        }
-        const oai = ctx.chatCompletionSettings || {};
-        const source = oai.chat_completion_source || 'openai';
-        let model = '';
-        try {
-            if (typeof ctx.getChatCompletionModel === 'function') model = ctx.getChatCompletionModel();
-        } catch (err) { /* ignore */ }
-        const body = {
-            chat_completion_source: source,
-            model,
-            messages: [
+            let body;
+            try { body = clone(settings); } catch (err) { body = {}; }
+            body.type = 'quiet';                 // no assistant prefill, no multi-swipe
+            body.messages = [
                 { role: 'system', content: systemPrompt },
                 { role: 'user', content: userText },
-            ],
-            max_tokens: 240,
-            temperature: 0.7,
-            stream: false,
-        };
-        let res;
-        try {
-            res = await fetch('/api/backends/chat-completions/generate', {
-                method: 'POST',
-                headers: ctx.getRequestHeaders(),
-                body: JSON.stringify(body),
-            });
-        } catch (err) {
-            throw new Error('chat-completions endpoint unreachable — ' + (err && err.message ? err.message : 'network error'));
+            ];
+            body.model = model || settings.openai_model || settings.custom_model || settings.claude_model || '';
+            body.stream = false;
+            body.n = 1;
+            body.max_tokens = Math.min(1024, Math.max(240, Number(settings.openai_max_tokens) || 240));
+            body.temperature = Number.isFinite(Number(settings.temp_openai)) ? Number(settings.temp_openai) : 0.7;
+            delete body.json_schema;
+            delete body.logprobs;
+            delete body.assistant_prefill;
+
+            let res;
+            try {
+                res = await fetch('/api/backends/chat-completions/generate', {
+                    method: 'POST',
+                    headers: ctx.getRequestHeaders(),
+                    body: JSON.stringify(body),
+                });
+            } catch (err) {
+                throw new Error('chat-completions endpoint unreachable — ' + (err && err.message ? err.message : 'network error'));
+            }
+            const rawText = await res.text();
+            let data = null;
+            try { data = rawText ? JSON.parse(rawText) : null; } catch (err) { data = null; }
+            if (!res.ok) {
+                const errObj = data && data.error;
+                const msg = (errObj && (errObj.message || errObj.error)) || errObj || (data && (data.detail || data.message))
+                    || rawText || ('HTTP ' + res.status);
+                throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg).slice(0, 240));
+            }
+            const choice = (data && Array.isArray(data.choices)) ? data.choices[0] : null;
+            let content = (choice && choice.message && choice.message.content)
+                || (choice && choice.text)
+                || (data && (data.content || data.text || data.response || (data.message && data.message.content)));
+            if (Array.isArray(content)) {
+                content = content.map((b) => (b && typeof b === 'object') ? (b.text || b.content || '') : String(b || '')).join('');
+            }
+            if (!content || !String(content).trim()) throw new Error('endpoint returned no text');
+            return { text: String(content) };
         }
-        const text = await res.text();
-        let data = null;
-        try { data = text ? JSON.parse(text) : null; } catch (err) { data = null; }
-        if (!res.ok) {
-            const msg = (data && (data.error || data.detail)) || text || ('HTTP ' + res.status);
-            throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+
+        /** Run every LLM path and report each outcome in the panel (phone has no console). */
+        async function diagnoseLLM() {
+            const rows = $('csc_llm_diag');
+            if (rows) { rows.hidden = false; rows.textContent = 'testing the LLM paths…'; }
+            const scene = gatherSceneContext();
+            try {
+                const { text, via } = await quietCaption(CAPTION_SYSTEM_PROMPT, scene.userPayload);
+                if (rows) {
+                    rows.innerHTML = '';
+                    (ui.llmDiag || []).forEach((r) => {
+                        const d = document.createElement('div');
+                        d.className = 'csc-diag-row ' + (r.ok ? 'csc-diag-ok' : 'csc-diag-fail');
+                        d.textContent = `${r.ok ? '✓' : '✕'} ${r.path}: ${r.detail}`;
+                        rows.appendChild(d);
+                    });
+                    const last = document.createElement('div');
+                    last.className = 'csc-diag-row csc-diag-ok';
+                    last.textContent = `→ used: ${via} (${String(text).trim().length} chars)`;
+                    rows.appendChild(last);
+                }
+                toast('success', 'LLM answered via ' + via);
+                return { text, via };
+            } catch (err) {
+                const msg = (err && err.message) ? err.message : String(err);
+                if (rows) {
+                    rows.innerHTML = '';
+                    (ui.llmDiag || []).forEach((r) => {
+                        const d = document.createElement('div');
+                        d.className = 'csc-diag-row ' + (r.ok ? 'csc-diag-ok' : 'csc-diag-fail');
+                        d.textContent = `${r.ok ? '✓' : '✕'} ${r.path}: ${r.detail}`;
+                        rows.appendChild(d);
+                    });
+                }
+                toast('error', 'Every LLM path failed. ' + msg);
+                return null;
+            }
         }
-        const choice = data && data.choices && data.choices[0];
-        const content = (choice && choice.message && choice.message.content) || (choice && choice.text) || (data && (data.content || data.text));
-        if (!content || !String(content).trim()) {
-            throw new Error('chat-completions endpoint returned no text.');
-        }
-        return { text: String(content), via: 'chat-completions backend' };
-    }
 
     /**
      * Clean the LLM reply into a single line of image tags, following ST's own
@@ -912,19 +1130,22 @@ ${lastText}`
         setError('');
         setBusy(true);
         setStatusLine('rebuilding caption (no render)…');
-        try {
-            const caption = await buildSceneCaption();
-            ui.captionOverride = caption;
-            showCaptionPreview(caption, ui.captionVia);
-            if ($('csc_prompt')) $('csc_prompt').value = caption;
-            autoGrow($('csc_prompt'));
-            setStatusLine('caption ready');
-            toast('success', 'Caption rebuilt — click Generate scene to render it.');
-        } catch (err) {
-            setError('ST couldn\'t run a quiet prompt; falling back to manual prompt. ' + (err && err.message ? err.message : err));
-            openAdvanced();
-            setStatusLine('caption failed');
-        } finally {
+                pillBusyStart('Building prompt', 'asking your LLM for the image prompt');
+                try {
+                    const caption = await buildSceneCaption();
+                    ui.captionOverride = caption;
+                    showCaptionPreview(caption, ui.captionVia);
+                    if ($('csc_prompt')) $('csc_prompt').value = caption;
+                    autoGrow($('csc_prompt'));
+                    setStatusLine('caption ready');
+                    hidePill();
+                    toast('success', 'Caption rebuilt — click Generate scene to render it.');
+                } catch (err) {
+                    setError('ST couldn\'t run a quiet prompt; falling back to manual prompt. ' + (err && err.message ? err.message : err));
+                    pillJobErrored(err && err.message ? err.message : String(err));
+                    openAdvanced();
+                    setStatusLine('caption failed');
+                } finally {
             setBusy(false);
         }
     }
@@ -1197,31 +1418,35 @@ ${lastText}`
         ui.captionOverride = null;
 
         if (!caption) {
-            setProgress(0, 'building caption with your LLM…');
-            setBusy(true);
-            try {
-                caption = await buildSceneCaption();
-            } catch (err) {
-                const msg = (err && err.message) ? err.message : String(err);
-                // The LLM answering with nothing is common (provider hiccup,
-                // filter, empty completion). Illustration must not die for that:
-                // fall back to the message text itself as the prompt.
-                const fromMessage = sanitizeCaption(scene.lastText);
-                if (fromMessage) {
-                    caption = fromMessage;
-                    ui.captionVia = 'fallback: last message text';
-                    ui.captionNegative = '';
-                    setStatusLine('LLM gave no caption — using the message text');
-                    toast('warning', 'No caption from the LLM (' + msg + ') — using the message text.');
-                } else {
-                    setError("ST couldn't run a quiet prompt and the message is empty. " + msg);
-                    setStatusLine('caption failed — use Advanced');
-                    setBusy(false);
-                    openAdvanced();
-                    toast('error', 'Caption failed: ' + msg);
-                    return;
-                }
-            }
+                    setProgress(0, 'building caption with your LLM…');
+                    setBusy(true);
+                    // The overlay has to be on screen BEFORE the LLM call: that step can
+                    // take 10-30 s and it is exactly where the phone used to show nothing.
+                    pillBusyStart('Building prompt', 'asking your LLM for the image prompt');
+                    try {
+                        caption = await buildSceneCaption();
+                    } catch (err) {
+                        const msg = (err && err.message) ? err.message : String(err);
+                        // The LLM answering with nothing is common (provider hiccup,
+                        // filter, empty completion). Illustration must not die for that:
+                        // fall back to the message text itself as the prompt.
+                        const fromMessage = sanitizeCaption(scene.lastText);
+                        if (fromMessage) {
+                            caption = fromMessage;
+                            ui.captionVia = 'fallback: last message text';
+                            ui.captionNegative = '';
+                            setStatusLine('LLM gave no caption — using the message text');
+                            toast('warning', 'No caption from the LLM (' + msg + ') — using the message text.');
+                        } else {
+                            setError("ST couldn't run a quiet prompt and the message is empty. " + msg);
+                            setStatusLine('caption failed — use Advanced');
+                            setBusy(false);
+                            pillJobErrored(msg);
+                            openAdvanced();
+                            toast('error', 'Caption failed: ' + msg);
+                            return;
+                        }
+                    }
             showCaptionPreview(caption, ui.captionVia);
             if ($('csc_prompt')) { $('csc_prompt').value = caption; autoGrow($('csc_prompt')); }
         } else {
@@ -1813,7 +2038,11 @@ ${lastText}`
         const scene = $('csc_generate_scene');
         if (scene) scene.addEventListener('click', generateScene);
         const regen = $('csc_regenerate_caption');
-        if (regen) regen.addEventListener('click', regenerateCaption);
+                if (regen) regen.addEventListener('click', regenerateCaption);
+                const testLlm = $('csc_test_llm');
+                if (testLlm) testLlm.addEventListener('click', diagnoseLLM);
+                const testOverlay = $('csc_test_overlay');
+                if (testOverlay) testOverlay.addEventListener('click', pillDemo);
         const gen = $('csc_generate');
         if (gen) gen.addEventListener('click', generate);
         const intr = $('csc_interrupt');
@@ -1899,6 +2128,8 @@ ${lastText}`
         generate,
         buildSceneCaption,
         quietCaption,
+        diagnoseLLM,
+        pillDemo,
         sanitizeCaption,
         gatherSceneContext,
         attachImageToLastMessage,
@@ -1921,6 +2152,8 @@ ${lastText}`
                     update: renderPillFromJob,
                     percentFor: pillPercentFor,
                     start: pillJobStarted,
+                    busy: pillBusyStart,
+                    demo: pillDemo,
                     done: pillJobDone,
                     error: pillJobErrored,
                     state: pill,

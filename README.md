@@ -117,6 +117,34 @@ A floating pill above the chat input shows progress while a job runs, even with 
 settings drawer closed: `Generating image… 43%` with `step 11/25` underneath. Cold model
 loads report `loading model` and advance 8→25% on a timer instead of sitting at 0%.
 
+### LLM fallback chain (v1.4)
+
+The caption no longer depends on one entry point. Each path is tried in order and
+an error **or an empty reply** moves on to the next:
+
+| # | Path | Why it is there |
+|---|---|---|
+| 1 | `generateQuietPrompt({removeReasoning:true})` | ST's canonical hidden completion |
+| 2 | same call with `removeReasoning:false` | reasoning models put the answer inside the thinking block; #1 strips it and returns `''` — this is the old *"generateQuietPrompt returned empty reply"* |
+| 3 | `generateRaw()` | no chat history, no character card: a blown context cannot kill it |
+| 4 | `POST /api/backends/chat-completions/generate` | body built from the live chat-completion settings, so proxies / Azure / Claude / OpenRouter keep working |
+
+If **all four** fail, the caption falls back to the message text and the image
+still renders. **⚡ test LLM** in the panel runs the chain and prints one row per
+path (green = answered, red = why not) — useful on a phone, where there is no console.
+
+### Progress overlay (v1.4)
+
+A small overlay sits at the **top of the chat area** — outside the extension
+drawer, so it is visible with the drawer shut. It shows the phase, an honest
+percentage, a progress bar, the step counter, and a ✕ that cancels the job.
+
+* Cold start (models loading) maps to 8-25% and says `loading model` instead of
+  showing a fake 0%.
+* Sampling maps 25-100% of the real progress.
+* During the **caption** step the bar sweeps, because no honest percentage exists yet.
+* **◉ show overlay** in the panel pins it for a few seconds to check it on your device.
+
 ## Settings
 
 ## Settings
