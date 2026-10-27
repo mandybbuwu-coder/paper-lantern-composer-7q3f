@@ -1,0 +1,362 @@
+/*
+ * Comfy Studio Prompt Composer — styles
+ * -----------------------------------------------------------------------
+ * Everything is scoped under .csc-root so it can never leak into or break
+ * SillyTavern's own theme. Colours prefer SillyTavern's theme variables and
+ * fall back to a warm-dark palette when the theme does not define them.
+ */
+
+.csc-root {
+    /* Warm-dark fallbacks. */
+    --csc-bg: var(--SmartThemeBlurTintColor, #221e1a);
+    --csc-panel: var(--SmartThemeUserMesBlurTintColor, #2b241d);
+    --csc-text: var(--SmartThemeBodyColor, #e8e2d8);
+    --csc-muted: var(--white30, #9b9184);
+    --csc-border: var(--SmartThemeBorderColor, #4a3f33);
+    --csc-accent: var(--SmartThemeQuoteColor, #e0a060);
+    --csc-accent-strong: #f0b877;
+    --csc-error: #e8756b;
+    --csc-ok: #7fbf7f;
+
+    color: var(--csc-text);
+    font-size: 0.92em;
+    line-height: 1.35;
+}
+
+/* ------------------------------------------------------------------ */
+/* Layout                                                              */
+/* ------------------------------------------------------------------ */
+
+.csc-root .csc-section {
+    border: 1px solid var(--csc-border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    margin-bottom: 8px;
+    background: color-mix(in srgb, var(--csc-panel) 55%, transparent);
+}
+
+.csc-root .csc-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.csc-root .csc-row-between {
+    justify-content: space-between;
+}
+
+.csc-root .csc-grid2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+.csc-root .csc-actions {
+    flex-wrap: wrap;
+}
+
+.csc-root .csc-mt {
+    margin-top: 8px;
+}
+
+.csc-root .csc-mt-sm {
+    margin-top: 4px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Text & inputs                                                       */
+/* ------------------------------------------------------------------ */
+
+.csc-root .csc-label {
+    display: block;
+    font-size: 0.82em;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--csc-muted);
+    margin-bottom: 3px;
+}
+
+.csc-root .csc-label-sm {
+    font-size: 0.75em;
+}
+
+.csc-root .csc-input,
+.csc-root .csc-textarea {
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.csc-root .csc-textarea {
+    resize: vertical;
+    min-height: 2.6em;
+    max-height: 320px;
+    overflow-y: auto;
+    font-family: inherit;
+}
+
+.csc-root .csc-muted {
+    color: var(--csc-muted);
+    font-style: italic;
+    font-size: 0.85em;
+}
+
+.csc-root .csc-status-line {
+    font-size: 0.8em;
+    color: var(--csc-muted);
+    text-transform: capitalize;
+}
+
+.csc-root .csc-val {
+    min-width: 2.6em;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: var(--csc-accent);
+}
+
+/* ------------------------------------------------------------------ */
+/* Status + warnings                                                   */
+/* ------------------------------------------------------------------ */
+
+.csc-root .csc-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85em;
+}
+
+.csc-root .csc-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    display: inline-block;
+    background: var(--csc-muted);
+    box-shadow: 0 0 6px currentColor;
+}
+
+.csc-root .csc-dot-on { background: var(--csc-ok); color: var(--csc-ok); }
+.csc-root .csc-dot-warn { background: var(--csc-accent); color: var(--csc-accent); }
+.csc-root .csc-dot-off { background: var(--csc-error); color: var(--csc-error); }
+
+.csc-root .csc-warn {
+    margin-top: 6px;
+    padding: 5px 7px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--csc-accent) 18%, transparent);
+    border: 1px solid var(--csc-accent);
+    font-size: 0.82em;
+}
+
+/* ------------------------------------------------------------------ */
+/* Chips / size presets                                                */
+/* ------------------------------------------------------------------ */
+
+.csc-root .csc-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.csc-root .csc-chip {
+    cursor: pointer;
+    border: 1px solid var(--csc-border);
+    background: transparent;
+    color: var(--csc-text);
+    border-radius: 999px;
+    padding: 2px 9px;
+    font-size: 0.8em;
+}
+
+.csc-root .csc-chip:hover {
+    border-color: var(--csc-accent);
+    color: var(--csc-accent);
+}
+
+.csc-root .csc-chip-active {
+    border-color: var(--csc-accent);
+    background: color-mix(in srgb, var(--csc-accent) 22%, transparent);
+    color: var(--csc-accent-strong);
+}
+
+/* ------------------------------------------------------------------ */
+/* Sliders                                                             */
+/* ------------------------------------------------------------------ */
+
+.csc-root .csc-slider-row {
+    display: grid;
+    grid-template-columns: 3.4em 1fr 2.8em;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+.csc-root .csc-slider-row .csc-label {
+    margin-bottom: 0;
+}
+
+.csc-root .csc-range {
+    width: 100%;
+    accent-color: var(--csc-accent);
+}
+
+/* ------------------------------------------------------------------ */
+/* LoRA rows                                                           */
+/* ------------------------------------------------------------------ */
+
+.csc-root .csc-loras {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.csc-root .csc-lora-row {
+    display: grid;
+    grid-template-columns: 1fr 5.2em 2em;
+    gap: 4px;
+    align-items: center;
+}
+
+.csc-root .csc-lora-incompatible {
+    opacity: 0.55;
+}
+
+.csc-root .csc-seed-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 4px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Buttons                                                             */
+/* ------------------------------------------------------------------ */
+
+.csc-root .csc-btn-sm {
+    font-size: 0.8em;
+    padding: 2px 7px;
+}
+
+.csc-root .csc-btn-primary {
+    border-color: var(--csc-accent) !important;
+    color: var(--csc-accent-strong) !important;
+}
+
+.csc-root .csc-btn-primary:disabled {
+    opacity: 0.6;
+}
+
+/* ------------------------------------------------------------------ */
+/* Progress                                                            */
+/* ------------------------------------------------------------------ */
+
+.csc-root .csc-progress {
+    height: 8px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--csc-border) 60%, transparent);
+    overflow: hidden;
+    margin-top: 8px;
+}
+
+.csc-root .csc-progress-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--csc-accent), var(--csc-accent-strong));
+    transition: width 0.2s ease;
+}
+
+.csc-root .csc-progress-meta {
+    margin-top: 3px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Error                                                               */
+/* ------------------------------------------------------------------ */
+
+.csc-root .csc-error {
+    margin-top: 6px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--csc-error);
+    background: color-mix(in srgb, var(--csc-error) 16%, transparent);
+    color: var(--csc-error);
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    font-size: 0.78em;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* ------------------------------------------------------------------ */
+/* Result                                                              */
+/* ------------------------------------------------------------------ */
+
+.csc-root .csc-result {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.csc-root .csc-img {
+    width: 100%;
+    max-height: 360px;
+    object-fit: contain;
+    border-radius: 6px;
+    border: 1px solid var(--csc-border);
+    background: #000;
+}
+
+.csc-root .csc-meta {
+    font-size: 0.78em;
+    color: var(--csc-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------------ */
+/* History                                                             */
+/* ------------------------------------------------------------------ */
+
+.csc-root .csc-history {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    max-height: 320px;
+    overflow-y: auto;
+}
+
+.csc-root .csc-history-item {
+    display: grid;
+    grid-template-columns: 44px 1fr auto;
+    gap: 7px;
+    align-items: center;
+    padding: 4px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.csc-root .csc-history-item:hover {
+    border-color: var(--csc-accent);
+    background: color-mix(in srgb, var(--csc-accent) 10%, transparent);
+}
+
+.csc-root .csc-history-thumb {
+    width: 44px;
+    height: 44px;
+    object-fit: cover;
+    border-radius: 4px;
+    background: #000;
+}
+
+.csc-root .csc-history-body {
+    min-width: 0;
+}
+
+.csc-root .csc-history-prompt {
+    font-size: 0.82em;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.csc-root .csc-history-meta {
+    font-size: 0.72em;
+    font-style: normal;
+}
