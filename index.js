@@ -147,6 +147,7 @@
         captionNegative: '',
         captionScene: '',
         captionCanonical: '',
+        captionJson: false,
                 lastCaptionOutfit: '',
         targetMesId: null,
     };
@@ -241,8 +242,41 @@
     }
 
     function currentSheet() {
-        return sheetOf(characterKey());
-    }
+            return sheetOf(characterKey());
+        }
+
+        /**
+         * The character card ALREADY holds the looks ("Appearance: …"), so an empty
+         * sheet is seeded from it instead of making the user retype what ST knows.
+         * The panel shows the seeded text and it stays editable.
+         */
+        function cardDescription() {
+            const ctx = getST();
+            if (!ctx) return '';
+            try {
+                const chars = Array.isArray(ctx.characters) ? ctx.characters : [];
+                const id = Number(ctx.characterId);
+                const ch = (Number.isFinite(id) && chars[id]) ? chars[id] : null;
+                if (!ch) return '';
+                const bits = [ch.description, ch.personality].filter(Boolean).join(' ');
+                return String(bits).replace(/\{\{[^}]*\}\}/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 700);
+            } catch (err) {
+                return '';
+            }
+        }
+
+        /** Seed an empty sheet from the character card. Returns the sheet. */
+        function ensureSheetSeeded() {
+            const sh = currentSheet();
+            if (String(sh.description || '').trim()) return sh;
+            const card = cardDescription();
+            if (!card) return sh;
+            sh.description = card;
+            sh.seededFromCard = true;
+            saveSettings();
+            refreshSheetUi();
+            return sh;
+        }
 
     function canonicalParts(sheet) {
         const sh = sheet || currentSheet();
@@ -462,6 +496,7 @@
                   <span>Keep the same outfit between images</span>
                 </label>
                 <button id="csc_sheet_from_last" class="csc-linklike" title="Take the outfit of the last caption">↧ from last</button>
+          <button id="csc_sheet_from_card" class="csc-linklike" title="Reload the description from the character card">↧ card</button>
               </div>
               <div id="csc_sheet_state" class="csc-muted csc-sheet-state"></div>
             </div>
@@ -970,12 +1005,14 @@
             const keep = $('csc_sheet_keep');
             if (keep) keep.checked = sh.keepOutfit !== false;
             const state = $('csc_sheet_state');
-            if (state) {
-                const has = !!(String(sh.description || '').trim() || String(sh.outfit || '').trim());
-                state.textContent = has
-                    ? 'saved for this character — injected into every image prompt'
-                    : 'empty: the model will invent the look, fill it once.';
-            }
+                    if (state) {
+                        const has = !!(String(sh.description || '').trim() || String(sh.outfit || '').trim());
+                        state.textContent = !has
+                            ? 'empty: the model will invent the look, fill it once.'
+                            : (sh.seededFromCard && !String(sh.description || '').trim()
+                                ? 'seeded from the card'
+                                : 'saved for this character — injected into every image prompt');
+                    }
             autoGrow(desc);
         }
 
@@ -1241,8 +1278,16 @@
                     const scene = gatherSceneContext();
                     try {
                         const { text, via } = await quietCaption(CAPTION_SYSTEM_PROMPT, scene.userPayload);
-                        paint({ cls: 'csc-diag-ok', text: `→ used: ${via} (${String(text).trim().length} chars)` });
-                        toast('success', 'LLM answered via ' + via);
+                                                const isJson = parseCaptionJson(text).ok;
+                                                paint({ cls: 'csc-diag-ok', text: `→ used: ${via} (${String(text).trim().length} chars) json=${isJson ? 'ok' : 'NO'}` });
+                                                if (rows) {
+                                                    const sample = document.createElement('div');
+                                                    sample.className = 'csc-diag-row csc-diag-sample';
+                                                    sample.textContent = String(text).trim().slice(0, 180);
+                                                    rows.appendChild(sample);
+                                                    ui.llmDiagText += '\nsample: ' + String(text).trim().slice(0, 180);
+                                                }
+                                                toast('success', 'LLM answered via ' + via);
                         return { text, via };
                     } catch (err) {
                         const msg = (err && err.message) ? err.message : String(err);
@@ -1388,18 +1433,36 @@ ${lastText}`
     async function buildSceneCaption() {
             const s = getSettings();
             const scene = gatherSceneContext();
-            const sheet = currentSheet();
+            // Seed from the character card on first use: ST already knows the looks.
+            const sheet = ensureSheetSeeded();
             // The sheet rides INSIDE the system prompt so the model knows who it is
             // drawing before it reads the scene.
             const { text, via } = await quietCaption(captionSystemPrompt(), scene.userPayload);
-            const parsed = parseCaptionJson(text);
-            let base = sanitizeCaption(parsed.ok ? parsed.prompt : text);
+
+            let parsed = parseCaptionJson(text);
+            let usedText = text;
+            let usedVia = via;
+            if (!parsed.ok) {
+                // The model answered prose. Ask once more, in a dead-simple shape:
+                // this is what turns a 900-character paragraph into image tags.
+                const repaired = await repairCaption(text);
+                if (repaired) {
+                    const p2 = parseCaptionJson(repaired);
+                    if (p2.ok) {
+                        parsed = p2;
+                        usedText = repaired;
+                        usedVia = via + ' + repair';
+                    }
+                }
+            }
+
+            let base = sanitizeCaption(parsed.ok ? parsed.prompt : usedText);
             if (!base) throw new Error('The LLM returned no usable caption.');
 
             // Learn the outfit for the NEXT image (the wardrobe memory).
             const learned = sanitizeCaption(parsed.outfit || '');
-                    ui.lastCaptionOutfit = learned;
-                    if (learned && sheet.keepOutfit !== false) {
+            ui.lastCaptionOutfit = learned;
+            if (learned && sheet.keepOutfit !== false) {
                 sheet.outfit = learned;
                 refreshSheetUi();
                 saveSettings();
@@ -1407,12 +1470,13 @@ ${lastText}`
 
             // Deterministic safety net: put back whatever the LLM dropped.
             const enforced = enforceCanonical(base, sheet);
-                        base = enforced.text;
-                        ui.captionCanonical = enforced.added.map((a) => a.text).join(', ');
-                        renderCanonicalNote();
+            base = enforced.text;
+            ui.captionCanonical = enforced.added.map((a) => a.text).join(', ');
+            renderCanonicalNote();
 
             const suffix = String(s.styleSuffix || '').trim();
-            ui.captionVia = via;
+            ui.captionVia = usedVia;
+            ui.captionJson = !!parsed.ok;
             ui.captionNegative = sanitizeCaption(parsed.negative || '');
             ui.captionScene = parsed.scene || '';
             // Append the style suffix without repeating tags the caption already
@@ -1422,6 +1486,28 @@ ${lastText}`
                 ? suffix.split(',').map(t => t.trim()).filter(t => t && !have.has(t.toLowerCase()))
                 : [];
             return extra.length ? `${base}, ${extra.join(', ')}` : base;
+        }
+
+        /**
+         * Second pass used only when the first answer was not JSON: same LLM, a
+         * conversion instruction and the schema, with the original text as input.
+         * Returns the raw reply (caller parses it) or null.
+         */
+        async function repairCaption(rawText) {
+            const ctx = getST();
+            if (!ctx || typeof ctx.generateRaw !== 'function') return null;
+            const systemPrompt = 'You convert an image description into STRICT JSON. Reply with the JSON object only: no prose, no fences.';
+            const ask = [
+                'JSON shape: {"prompt": "...", "negative": "...", "scene": "...", "outfit": "..."}',
+                '"prompt": ONE line of English comma-separated visual tags (subject, appearance, clothes, pose, setting, lighting, framing), max 130 words.',
+                '"negative": short comma list of artefacts to avoid. "scene": one sentence. "outfit": clothes worn, or "" if none.',
+                '',
+                'DESCRIPTION TO CONVERT:',
+                String(rawText || '').slice(0, 2500),
+            ].join('\n');
+            return await llmStep('raw generation (repair)', () => ctx.generateRaw({
+                prompt: ask, systemPrompt, responseLength: 500, jsonSchema: CAPTION_JSON_SCHEMA,
+            }));
         }
 
     /**
@@ -2390,7 +2476,23 @@ ${lastText}`
                                 toast('info', 'Sheet cleared for ' + key);
                             });
                         }
-                        const sheetFromLast = $('csc_sheet_from_last');
+                        const sheetFromCard = $('csc_sheet_from_card');
+        if (sheetFromCard) {
+            sheetFromCard.addEventListener('click', () => {
+                const card = cardDescription();
+                if (!card) {
+                    toast('warning', 'This chat has no character card description to copy.');
+                    return;
+                }
+                const sh = currentSheet();
+                sh.description = card;
+                sh.seededFromCard = true;
+                saveSettings();
+                refreshSheetUi();
+                toast('success', 'Description taken from the character card.');
+            });
+        }
+        const sheetFromLast = $('csc_sheet_from_last');
                         if (sheetFromLast) {
                             sheetFromLast.addEventListener('click', () => {
                                 const txt = String(ui.lastCaptionOutfit || '').trim();
@@ -2427,10 +2529,11 @@ ${lastText}`
         const event_types = ctx.eventTypes || ctx.event_types || {};
 
         const onChatChanged = () => {
-                    refreshHistory().catch(() => {});
-                    // A different character means a different sheet.
-                    refreshSheetUi();
-                };
+                            refreshHistory().catch(() => {});
+                            // A different character means a different sheet (and card).
+                            ensureSheetSeeded();
+                            refreshSheetUi();
+                        };
         const onMessage = () => {
             window.__csc_last_message_ts = Date.now();
         };
@@ -2463,7 +2566,8 @@ ${lastText}`
         const meta = await refreshMeta();
                         if (meta) syncFormFromSettings();
                         const verEl = $('csc_version');
-                        if (verEl) verEl.textContent = ' · v' + VERSION;
+                                                if (verEl) verEl.textContent = ' · v' + VERSION;
+                                        ensureSheetSeeded();
                 refreshSheetUi();
         refreshHistory().catch(() => {});
     }
@@ -2501,7 +2605,9 @@ ${lastText}`
                 characterKey,
                 sheetOf,
                 currentSheet,
-                captionSystemPrompt,
+                        ensureSheetSeeded,
+                        cardDescription,
+                        captionSystemPrompt,
                 enforceCanonical,
                 refreshSheetUi,
         sanitizeCaption,

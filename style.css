@@ -608,6 +608,13 @@
     padding-bottom: 3px;
 }
 
+.csc-diag-sample {
+    opacity: 0.6;
+    white-space: pre-wrap;
+    max-height: 4.5em;
+    overflow: hidden;
+}
+
 .csc-version {
     font-size: 0.78em;
     opacity: 0.6;

@@ -133,6 +133,18 @@ If **all four** fail, the caption falls back to the message text and the image
 still renders. **⚡ test LLM** in the panel runs the chain and prints one row per
 path (green = answered, red = why not) — useful on a phone, where there is no console.
 
+### Card seeding + JSON repair (v1.5.3)
+
+* **The sheet fills itself from the character card.** An empty sheet is seeded
+  with the card's `description` + `personality` (macros stripped, ~700 chars), so
+  age, hair, eyes, scars and marks are in the prompt without retyping anything.
+  The text stays editable, and **↧ card** re-pulls it after you edit the card.
+* **Prose answers are converted.** If the first reply is not JSON (provider
+  ignoring `jsonSchema`, model ignoring the instruction), the extension runs one
+  repair call — "convert this description into this JSON" with the same schema —
+  and uses the result. The panel reports `via … + repair`, so you can see when it
+  happened. Only when even that fails does it use the text as tags.
+
 ### Caption path memory + forced JSON (v1.5.2)
 
 Two follow-ups after the phone diagnostics showed `quiet prompt: empty reply`
