@@ -74,23 +74,34 @@ Reload the page (F5).
 
 One button: **Generate scene**.
 
-1. It reads the last N chat messages (setting, default 6) plus the character card's
-   appearance fields and your persona name.
-2. It asks **the LLM you already have configured in SillyTavern** for a single
-   image caption (subject, appearance, clothing, pose, setting, light, camera).
-   No second model, no API key, no typing.
-3. It appends your **style suffix**, skipping tags the caption already has.
-4. It sends the caption to comfy-studio and polls the job.
-5. The finished image is **attached to the last chat message as media** — no new
-   turn, nothing is auto-sent, so no LLM reply is triggered.
+1. It takes **only the last message of the chat** — not the whole context, not the
+   character card, not older turns. Whatever was written last is what gets illustrated.
+2. It sends that message to **the API you are already roleplaying with** (the active
+   SillyTavern connection: OpenRouter, Anthropic, a local model, whatever is selected
+   in the Connection Manager) with a permissive, no-refusal system prompt that asks for
+   the scene **as JSON**:
 
-**↻ regenerate caption** re-runs only step 2 when the caption came out wrong —
+   ```json
+   {"prompt": "visual tags for the image", "negative": "artefacts to avoid", "scene": "one line"}
+   ```
+
+   The extension never carries an API key or a provider URL of its own: it calls ST's
+   own quiet-prompt path, so it always uses the current model.
+3. The JSON is parsed strictly (code fences and stray prose are discarded). If a model
+   ignores the format and answers with prose, the whole reply is used as the prompt and
+   the button still works.
+4. Your **style suffix** is merged in tag by tag, skipping tags the caption already has.
+5. The caption goes to comfy-studio. The image is **attached to the last message as
+   media** — no new turn, nothing auto-sent, so no LLM reply is triggered.
+
+**↻ regenerate caption** re-runs only the caption step when the JSON came out wrong —
 no render is wasted.
 
-A floating pill above the chat input shows progress while a job runs, even with
-the settings drawer closed: `Generating image… 43%` with `step 11/25` underneath.
-Cold model loads report `loading model` and advance 8→25% on a timer instead of
-sitting at 0%.
+A floating pill above the chat input shows progress while a job runs, even with the
+settings drawer closed: `Generating image… 43%` with `step 11/25` underneath. Cold model
+loads report `loading model` and advance 8→25% on a timer instead of sitting at 0%.
+
+## Settings
 
 ## Settings
 
@@ -102,7 +113,6 @@ sitting at 0%.
 | **Auto-insert image into the chat** | on | Attach the result to the last message. Off = only show it in the panel. |
 | **Style suffix** | `anime illustration, cinematic lighting, highly detailed, 35mm film grain` | Appended to every caption. Duplicated tags are dropped. |
 | **Caption model** | *(empty = same as chat)* | Optional model name passed to the quiet-prompt call. |
-| **Chat messages to read** | `6` | How much recent chat feeds the caption. |
 
 Everything below lives in the collapsed **Advanced — manual prompt & parameters**
 disclosure (closed by default): manual prompt override, negative prompt, model,
