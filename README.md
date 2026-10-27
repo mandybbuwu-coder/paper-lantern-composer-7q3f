@@ -188,3 +188,19 @@ official extensions ([Prompt Inspector](https://github.com/SillyTavern/Extension
 ## License
 
 AGPL-3.0 (matches SillyTavern's extension requirements).
+---
+
+## Repo de este proyecto
+
+- **Repo (público, cuenta desechable):** https://github.com/mandybbuwu-coder/paper-lantern-composer-7q3f
+- **URL para SillyTavern (Install extension):**
+
+  ```
+  https://github.com/mandybbuwu-coder/paper-lantern-composer-7q3f
+  ```
+
+- **Actualizar:** editar los archivos aquí y ejecutar `~/st-push.sh "mensaje"`.
+  El token del repo está en `~/.config/comfy-studio/github_token_mandybbuwu`
+  (cuenta desechable, solo escribe en el repo de la extensión).
+- **No pongas nada privado en este repo**: es público y el nombre es lo único
+  que lo mantiene poco visible.

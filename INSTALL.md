@@ -80,3 +80,19 @@ To use a different account: `gh auth login` and repeat.
 
 `manifest.json` has `auto_update: false`. To update, re-upload the changed files to
 GitHub and press **Update** on the extension in ST (ST does a `git pull`).
+---
+
+## Repo de este proyecto
+
+- **Repo (público, cuenta desechable):** https://github.com/mandybbuwu-coder/paper-lantern-composer-7q3f
+- **URL para SillyTavern (Install extension):**
+
+  ```
+  https://github.com/mandybbuwu-coder/paper-lantern-composer-7q3f
+  ```
+
+- **Actualizar:** editar los archivos aquí y ejecutar `~/st-push.sh "mensaje"`.
+  El token del repo está en `~/.config/comfy-studio/github_token_mandybbuwu`
+  (cuenta desechable, solo escribe en el repo de la extensión).
+- **No pongas nada privado en este repo**: es público y el nombre es lo único
+  que lo mantiene poco visible.
