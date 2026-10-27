@@ -211,6 +211,22 @@ percentage, a progress bar, the step counter, and a ✕ that cancels the job.
 * During the **caption** step the bar sweeps, because no honest percentage exists yet.
 * **◉ show overlay** in the panel pins it for a few seconds to check it on your device.
 
+### Nothing about looks is hardcoded (v1.6)
+
+The extension does **not** define how anyone looks. No character sheet, no traits,
+no outfit stored and re-injected. The model derives everything from two inputs:
+
+1. **CHAT CONTEXT** — the last 10 messages (600 chars each, 5 000 total), oldest
+   first, `Name: text`. That is where age, hair, eyes, body, scars and clothes
+   come from, because that is where the roleplay wrote them.
+2. **PREVIOUS IMAGE OF THIS SAME PERSON** — the prompt of the last image generated
+   in this chat, so the next one keeps the identical face and outfit. Cleared when
+   the chat changes.
+
+The system prompt only states the job: read the context, interpret the moment
+visually, translate it to tags, answer in one JSON object. The words "never
+invent" are literal — if the chat never says it, the picture does not get it.
+
 ## Settings
 
 ## Settings

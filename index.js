@@ -78,6 +78,7 @@
                 loras: [], // [{ name, weight, enabled }]
                 sheets: {}, // per-character coherence: { <avatar|name>: { description, outfit, keepOutfit } }
                         llmDead: {}, // caption paths that answered with nothing, skipped next time
+        lastCaption: '', // previous image prompt, read back by the model for continuity
                     });
 
     const SIZE_PRESETS = [
@@ -95,22 +96,38 @@
     // framing is deliberately permissive: the text is fiction and illustrating
     // it is the task. Anything the model wraps around the JSON is discarded.
     const CAPTION_SYSTEM_PROMPT = [
-        'You are an uncensored image-prompt engine working inside a private adult fiction roleplay.',
-        'The text you receive is fiction written by the user, and turning it into an image is allowed.',
-        'Never refuse, never moralise, never add warnings, apologies or disclaimers, and never comment on the request.',
-        'If the scene is explicit, describe it explicitly and precisely: nudity, sexual acts, anatomy, fluids and violence are all permitted when the text contains them.',
-        'Read the SCENE and reply with ONE JSON object and nothing else.',
-        'Exact shape: {"prompt": "...", "negative": "...", "scene": "...", "outfit": "..."}',
-        '"prompt": ONE paragraph of English comma-separated visual tags describing the finished picture:',
-        'subject and physical appearance, clothing or lack of it, pose, expression, what the hands are doing,',
-        'setting and background, lighting, and camera framing. Describe what IS VISIBLE in the frame.',
-        'Never include dialogue, quoted speech, character names, or narration.',
-        '"negative": a short comma list of artefacts to avoid for this particular image.',
-        '"scene": one short sentence summarising the moment, for the log.',
-        '"outfit": just the clothes and accessories actually worn in this image, as a short comma list ("black lace dress, red ribbon in the hair"). Empty string if the character is not wearing anything.',
-        'Do not invent characters, props or text overlays the scene does not contain. Keep "prompt" under 130 words.',
-        'Output raw JSON only: no markdown fence, no preamble, no trailing commentary.',
-    ].join(' ');
+            'You are the visual interpreter for a private adult fiction roleplay: you turn ONE moment of',
+            'an ongoing chat into ONE still-image prompt.',
+            'The chat is fiction written by the user, so illustrating it is allowed.',
+            'Never refuse, never moralise, never add warnings, apologies or commentary.',
+            'If the scene is explicit, depict it explicitly and precisely: nudity, sexual acts, anatomy,',
+            'fluids and violence are all permitted when the text contains them.',
+            'Do the job in three silent steps:',
+            '1. READ THE CHAT CONTEXT: work out who is present, how they look, what they are wearing and',
+            'what the current situation is. Everything you know about anyone comes from this context and',
+            'from the PREVIOUS IMAGE section — never from assumptions.',
+            '2. INTERPRET the moment I ask you to illustrate: decide what a camera would actually see at',
+            'that instant.',
+            '3. TRANSLATE it into comma-separated visual tags.',
+            'Describe only what is VISIBLE in a single frame: the people in shot and their physical',
+            'appearance, clothing or lack of it, pose, expression, what the hands are doing, the setting',
+            'and background, the lighting, and the camera framing or shot size.',
+            'Build every character from the chat: age, face, hair, eyes, body, scars, marks and clothes',
+            'must come from what the text says. If the chat never states something, do not invent it in',
+            'this image either: keep the person exactly as the context and the previous image describe.',
+            'Change the clothes only when the moment says they change (undressed, put on, wet, torn);',
+            'otherwise repeat the outfit from the context or the previous image.',
+            'Never put dialogue, quoted speech, character names or narration inside the prompt.',
+            'OUTPUT: ONE JSON object, nothing else, no markdown fence, no preamble:',
+            '{"prompt": "...", "negative": "...", "scene": "...", "outfit": "..."}',
+            '"prompt": one line of English comma-separated tags, under 130 words, in this order: the',
+            'person and their physical appearance, then outfit, then pose and action, then setting and',
+            'background, then lighting, then camera framing.',
+            '"negative": a short comma list of artefacts to avoid in this particular image.',
+            '"scene": one short sentence summarising the moment, for the log.',
+            '"outfit": the clothes and accessories visible in the image, comma list; "" if none.',
+            'Do not invent characters, props or text overlays the scene does not contain.',
+        ].join(' ');
 
     // JSON schema handed to ST's raw generation so the model is FORCED to answer
     // in the caption shape instead of prose. `returnInvalid` keeps an unparseable
@@ -274,7 +291,6 @@
             sh.description = card;
             sh.seededFromCard = true;
             saveSettings();
-            refreshSheetUi();
             return sh;
         }
 
@@ -300,11 +316,14 @@
         'Order the "prompt" like this: this character first, then the outfit, then pose, setting, lighting and framing.',
     ].join('\n');
 
-    function captionSystemPrompt() {
-        const traits = canonicalBlock();
-        if (!traits) return CAPTION_SYSTEM_PROMPT;
-        return CAPTION_SYSTEM_PROMPT + '\n\n' + CANONICAL_RULES.replace('__TRAITS__', traits);
-    }
+    /**
+         * The instruction is the whole prompt: no character traits, no clothing and no
+         * appearance are injected by the extension. Everything visual is derived by the
+         * model from the chat context and the previous image (see gatherSceneContext).
+         */
+        function captionSystemPrompt() {
+            return CAPTION_SYSTEM_PROMPT;
+        }
 
     const NUDITY_RE = /\b(nude|naked|topless|bottomless|shirtless|undressed|unclothed|no clothes|clothes off|bare (?:body|chest|breasts?))\b/i;
 
@@ -479,26 +498,6 @@
                   </div>
       </div>
 
-      <!-- CHARACTER COHERENCE ------------------------------------------- -->
-            <div class="csc-section">
-              <div class="csc-row csc-row-between">
-                <label class="csc-label" for="csc_sheet_desc">Character coherence<span id="csc_sheet_who" class="csc-muted csc-sheet-who"></span></label>
-                <button id="csc_sheet_clear" class="csc-linklike" title="Erase this character's sheet">⌫</button>
-              </div>
-              <textarea id="csc_sheet_desc" class="text_pole csc-input csc-sheet-desc" rows="2"
-                placeholder="age, face, hair, eyes, body, scars / tattoos / marks — e.g. 26 years old, long silver hair, green eyes, pale skin, small scar above the left eyebrow"></textarea>
-              <label class="csc-label csc-mt-sm" for="csc_sheet_outfit">Outfit (reused unless the scene changes clothes)</label>
-              <input id="csc_sheet_outfit" class="text_pole csc-input" type="text"
-                placeholder="black lace dress, red ribbon in the hair">
-              <div class="csc-row csc-row-between csc-mt-sm">
-                <label class="csc-check-row">
-                  <input id="csc_sheet_keep" type="checkbox">
-                  <span>Keep the same outfit between images</span>
-                </label>
-                <button id="csc_sheet_from_last" class="csc-linklike" title="Take the outfit of the last caption">↧ from last</button>
-          <button id="csc_sheet_from_card" class="csc-linklike" title="Reload the description from the character card">↧ card</button>
-              </div>
-              <div id="csc_sheet_state" class="csc-muted csc-sheet-state"></div>
             </div>
 
             <div class="csc-section">
@@ -1403,28 +1402,60 @@
     }
 
     function gatherSceneContext() {
-        const ctx = getST();
-        const chat = (ctx && Array.isArray(ctx.chat)) ? ctx.chat : [];
-        const charName = (ctx && ctx.name2) ? ctx.name2 : 'the character';
-        const personaName = (ctx && ctx.name1) ? ctx.name1 : 'the user';
+            const ctx = getST();
+            const chat = (ctx && Array.isArray(ctx.chat)) ? ctx.chat : [];
+            const charName = (ctx && ctx.name2) ? ctx.name2 : 'the character';
+            const personaName = (ctx && ctx.name1) ? ctx.name1 : 'the user';
 
-        let last = null;
-        let lastIndex = -1;
-        for (let i = chat.length - 1; i >= 0; i -= 1) {
-            const m = chat[i];
-            if (m && m.mes && String(m.mes).trim()) { last = m; lastIndex = i; break; }
+            let last = null;
+            let lastIndex = -1;
+            for (let i = chat.length - 1; i >= 0; i -= 1) {
+                const m = chat[i];
+                if (m && m.mes && String(m.mes).trim()) { last = m; lastIndex = i; break; }
+            }
+            const speaker = last ? (last.is_user ? personaName : charName) : '';
+            const lastText = last ? stripHtml(last.mes) : '';
+
+            // A WINDOW of the chat, not just the last line. This is the ONLY source of
+            // how anyone looks: the extension injects no traits and no outfit.
+            const CONTEXT_MESSAGES = 10;
+            const PER_MESSAGE_CHARS = 600;
+            const TOTAL_CHARS = 5000;
+            const lines = [];
+            let budget = TOTAL_CHARS;
+            for (let i = Math.max(0, lastIndex - CONTEXT_MESSAGES + 1); i <= lastIndex && i < chat.length; i += 1) {
+                const m = chat[i];
+                if (!m || !m.mes) continue;
+                const body = stripHtml(m.mes).replace(/\s+/g, ' ').trim();
+                if (!body) continue;
+                const name = m.is_user ? personaName : (m.name || charName);
+                const clipped = body.length > PER_MESSAGE_CHARS ? body.slice(0, PER_MESSAGE_CHARS) + '…' : body;
+                const line = `${name}: ${clipped}`;
+                if (line.length > budget) break;
+                budget -= line.length;
+                lines.push(line);
+            }
+
+            const previous = String(getSettings().lastCaption || '').trim();
+            const NL = String.fromCharCode(10);
+            const parts = [];
+            if (lines.length) {
+                parts.push('CHAT CONTEXT (oldest first; use it to know who is present and how they look):');
+                parts.push(lines.join(NL));
+                parts.push('');
+            }
+            parts.push(`ILLUSTRATE THIS MOMENT — message #${lastIndex} from ${speaker}:`);
+            parts.push(lastText || '(the last message is empty)');
+            if (previous) {
+                parts.push('');
+                parts.push('PREVIOUS IMAGE OF THIS SAME PERSON (keep the identical face, hair, body and outfit');
+                parts.push('unless the moment above changes them):');
+                parts.push(previous);
+            }
+
+            const userPayload = parts.join(NL);
+            return { charName, personaName, speaker, lastText, lastIndex, userPayload, previous };
         }
-        const speaker = last ? (last.is_user ? personaName : charName) : '';
-        const lastText = last ? stripHtml(last.mes) : '';
-
-        const userPayload = lastText
-            ? `SPEAKER: ${speaker}
-SCENE (illustrate exactly this moment):
-${lastText}`
-            : 'SCENE: (the last message is empty)';
-
-        return { charName, personaName, speaker, lastText, lastIndex, userPayload };
-    }
 
     /**
      * Build the final caption from the live chat using the LLM. Appends the
@@ -1432,60 +1463,47 @@ ${lastText}`
      */
     async function buildSceneCaption() {
             const s = getSettings();
-            const scene = gatherSceneContext();
-            // Seed from the character card on first use: ST already knows the looks.
-            const sheet = ensureSheetSeeded();
-            // The sheet rides INSIDE the system prompt so the model knows who it is
-            // drawing before it reads the scene.
-            const { text, via } = await quietCaption(captionSystemPrompt(), scene.userPayload);
+                        const scene = gatherSceneContext();
+                        const { text, via } = await quietCaption(captionSystemPrompt(), scene.userPayload);
 
-            let parsed = parseCaptionJson(text);
-            let usedText = text;
-            let usedVia = via;
-            if (!parsed.ok) {
-                // The model answered prose. Ask once more, in a dead-simple shape:
-                // this is what turns a 900-character paragraph into image tags.
-                const repaired = await repairCaption(text);
-                if (repaired) {
-                    const p2 = parseCaptionJson(repaired);
-                    if (p2.ok) {
-                        parsed = p2;
-                        usedText = repaired;
-                        usedVia = via + ' + repair';
-                    }
-                }
-            }
+                        let parsed = parseCaptionJson(text);
+                        let usedText = text;
+                        let usedVia = via;
+                        if (!parsed.ok) {
+                            // The model answered prose. Ask once more, in a dead-simple shape:
+                            // this is what turns a long paragraph into image tags.
+                            const repaired = await repairCaption(text);
+                            if (repaired) {
+                                const p2 = parseCaptionJson(repaired);
+                                if (p2.ok) {
+                                    parsed = p2;
+                                    usedText = repaired;
+                                    usedVia = via + ' + repair';
+                                }
+                            }
+                        }
 
-            let base = sanitizeCaption(parsed.ok ? parsed.prompt : usedText);
-            if (!base) throw new Error('The LLM returned no usable caption.');
+                        let base = sanitizeCaption(parsed.ok ? parsed.prompt : usedText);
+                        if (!base) throw new Error('The LLM returned no usable caption.');
 
-            // Learn the outfit for the NEXT image (the wardrobe memory).
-            const learned = sanitizeCaption(parsed.outfit || '');
-            ui.lastCaptionOutfit = learned;
-            if (learned && sheet.keepOutfit !== false) {
-                sheet.outfit = learned;
-                refreshSheetUi();
-                saveSettings();
-            }
-
-            // Deterministic safety net: put back whatever the LLM dropped.
-            const enforced = enforceCanonical(base, sheet);
-            base = enforced.text;
-            ui.captionCanonical = enforced.added.map((a) => a.text).join(', ');
-            renderCanonicalNote();
-
-            const suffix = String(s.styleSuffix || '').trim();
-            ui.captionVia = usedVia;
-            ui.captionJson = !!parsed.ok;
-            ui.captionNegative = sanitizeCaption(parsed.negative || '');
-            ui.captionScene = parsed.scene || '';
-            // Append the style suffix without repeating tags the caption already
-            // carries ("cinematic lighting" twice looks broken and costs tokens).
-            const have = new Set(base.toLowerCase().split(/[,;]/).map(t => t.trim()).filter(Boolean));
-            const extra = suffix
-                ? suffix.split(',').map(t => t.trim()).filter(t => t && !have.has(t.toLowerCase()))
-                : [];
-            return extra.length ? `${base}, ${extra.join(', ')}` : base;
+                        const suffix = String(s.styleSuffix || '').trim();
+                        ui.captionVia = usedVia;
+                        ui.captionJson = !!parsed.ok;
+                        ui.captionNegative = sanitizeCaption(parsed.negative || '');
+                        ui.captionScene = parsed.scene || '';
+                        ui.lastCaptionOutfit = sanitizeCaption(parsed.outfit || '');
+                        // Append the style suffix without repeating tags the caption already
+                        // carries ("cinematic lighting" twice looks broken and costs tokens).
+                        const have = new Set(base.toLowerCase().split(/[,;]/).map(t => t.trim()).filter(Boolean));
+                        const extra = suffix
+                            ? suffix.split(',').map(t => t.trim()).filter(t => t && !have.has(t.toLowerCase()))
+                            : [];
+                        const finalCaption = extra.length ? `${base}, ${extra.join(', ')}` : base;
+                        // Continuity for the NEXT image is THIS prompt, read back by the model.
+                        // No appearance is stored or re-injected by the extension.
+                        s.lastCaption = finalCaption;
+                        saveSettings();
+                        return finalCaption;
         }
 
         /**
@@ -1821,12 +1839,8 @@ ${lastText}`
                         // fall back to the message text itself as the prompt.
                         const fromMessage = sanitizeCaption(scene.lastText);
                                                 if (fromMessage) {
-                                                    // Coherence also applies to the fallback: a dead LLM is
-                                                    // no reason to let the character change between images.
-                                                    const forced = enforceCanonical(fromMessage, currentSheet());
-                                                    caption = forced.text;
-                                                    ui.captionCanonical = forced.added.map((a) => a.text).join(', ');
-                                                    ui.captionVia = 'fallback: last message text';
+                                                                                caption = fromMessage;
+                                                                                ui.captionVia = 'fallback: last message text';
                             ui.captionNegative = '';
                             setStatusLine('LLM gave no caption — using the message text');
                             toast('warning', 'No caption from the LLM (' + msg + ') — using the message text. Press ⚡ test LLM then 📋 copy to see why.');
@@ -2439,73 +2453,6 @@ ${lastText}`
                 const testOverlay = $('csc_test_overlay');
                         if (testOverlay) testOverlay.addEventListener('click', pillDemo);
 
-                        // --- character sheet (coherence) -----------------------------------
-                        const sheetDesc = $('csc_sheet_desc');
-                        if (sheetDesc) {
-                            sheetDesc.addEventListener('input', () => {
-                                currentSheet().description = String(sheetDesc.value || '');
-                                saveSettings();
-                                autoGrow(sheetDesc);
-                                refreshSheetUi();
-                            });
-                        }
-                        const sheetOutfit = $('csc_sheet_outfit');
-                        if (sheetOutfit) {
-                            sheetOutfit.addEventListener('input', () => {
-                                currentSheet().outfit = String(sheetOutfit.value || '');
-                                saveSettings();
-                                refreshSheetUi();
-                            });
-                        }
-                        const sheetKeep = $('csc_sheet_keep');
-                        if (sheetKeep) {
-                            sheetKeep.addEventListener('change', () => {
-                                currentSheet().keepOutfit = !!sheetKeep.checked;
-                                saveSettings();
-                                refreshSheetUi();
-                            });
-                        }
-                        const sheetClear = $('csc_sheet_clear');
-                        if (sheetClear) {
-                            sheetClear.addEventListener('click', () => {
-                                const key = characterKey();
-                                const s = getSettings();
-                                if (s.sheets) delete s.sheets[key];
-                                saveSettings();
-                                refreshSheetUi();
-                                toast('info', 'Sheet cleared for ' + key);
-                            });
-                        }
-                        const sheetFromCard = $('csc_sheet_from_card');
-        if (sheetFromCard) {
-            sheetFromCard.addEventListener('click', () => {
-                const card = cardDescription();
-                if (!card) {
-                    toast('warning', 'This chat has no character card description to copy.');
-                    return;
-                }
-                const sh = currentSheet();
-                sh.description = card;
-                sh.seededFromCard = true;
-                saveSettings();
-                refreshSheetUi();
-                toast('success', 'Description taken from the character card.');
-            });
-        }
-        const sheetFromLast = $('csc_sheet_from_last');
-                        if (sheetFromLast) {
-                            sheetFromLast.addEventListener('click', () => {
-                                const txt = String(ui.lastCaptionOutfit || '').trim();
-                                if (!txt) {
-                                    toast('warning', 'No outfit captured yet — generate one image first.');
-                                    return;
-                                }
-                                currentSheet().outfit = txt;
-                                saveSettings();
-                                refreshSheetUi();
-                                toast('success', 'Outfit taken from the last caption.');
-                            });
-                        }
         const gen = $('csc_generate');
         if (gen) gen.addEventListener('click', generate);
         const intr = $('csc_interrupt');
@@ -2531,9 +2478,7 @@ ${lastText}`
         const onChatChanged = () => {
                             refreshHistory().catch(() => {});
                             // A different character means a different sheet (and card).
-                            ensureSheetSeeded();
-                            refreshSheetUi();
-                        };
+                                                    };
         const onMessage = () => {
             window.__csc_last_message_ts = Date.now();
         };
@@ -2567,9 +2512,7 @@ ${lastText}`
                         if (meta) syncFormFromSettings();
                         const verEl = $('csc_version');
                                                 if (verEl) verEl.textContent = ' · v' + VERSION;
-                                        ensureSheetSeeded();
-                refreshSheetUi();
-        refreshHistory().catch(() => {});
+                                    refreshHistory().catch(() => {});
     }
 
     function init() {
