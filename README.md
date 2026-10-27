@@ -133,6 +133,22 @@ If **all four** fail, the caption falls back to the message text and the image
 still renders. **⚡ test LLM** in the panel runs the chain and prints one row per
 path (green = answered, red = why not) — useful on a phone, where there is no console.
 
+### Caption path memory + forced JSON (v1.5.2)
+
+Two follow-ups after the phone diagnostics showed `quiet prompt: empty reply`
+but `raw generation: 691 chars`:
+
+* **The raw path now asks for the caption JSON explicitly.** `generateRaw` is
+  called with a `jsonSchema` (`prompt` required, plus `negative`, `scene`,
+  `outfit`), so ST enforces/extracts the shape instead of returning prose. A
+  second raw variant using `prefill` covers providers that ignore schemas.
+* **Dead paths are remembered.** A path that answers with nothing is stored in
+  `llmDead` and skipped on the next caption, so a phone where the quiet prompt
+  is broken goes straight to raw instead of burning 1-3 s per image. The order
+  itself never changes (best path first), entries expire after 5 minutes, and if
+  every non-dead path fails the memory is wiped and everything is retried once.
+  The diagnostics line shows `dead=…` so you can see what it learned.
+
 ### When the caption LLM keeps failing (v1.5.1)
 
 The panel header now shows the **loaded build** (`v1.5.1`) — if it says anything

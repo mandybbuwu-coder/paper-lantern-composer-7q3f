@@ -77,7 +77,8 @@
         batch: 1,
                 loras: [], // [{ name, weight, enabled }]
                 sheets: {}, // per-character coherence: { <avatar|name>: { description, outfit, keepOutfit } }
-            });
+                        llmDead: {}, // caption paths that answered with nothing, skipped next time
+                    });
 
     const SIZE_PRESETS = [
         { label: '512²', w: 512, h: 512 },
@@ -110,6 +111,26 @@
         'Do not invent characters, props or text overlays the scene does not contain. Keep "prompt" under 130 words.',
         'Output raw JSON only: no markdown fence, no preamble, no trailing commentary.',
     ].join(' ');
+
+    // JSON schema handed to ST's raw generation so the model is FORCED to answer
+    // in the caption shape instead of prose. `returnInvalid` keeps an unparseable
+    // answer as text (we can still salvage it) instead of an empty object.
+    const CAPTION_JSON_SCHEMA = {
+        name: 'image_caption',
+        description: 'Comma-separated image tags for the illustration plus a negative list',
+        strict: false,
+        returnInvalid: true,
+        value: {
+            type: 'object',
+            properties: {
+                prompt: { type: 'string', description: 'English comma-separated visual tags' },
+                negative: { type: 'string' },
+                scene: { type: 'string' },
+                outfit: { type: 'string', description: 'clothes worn, comma list' },
+            },
+            required: ['prompt'],
+        },
+    };
 
     // Runtime UI state (never persisted).
     const ui = {
@@ -1018,41 +1039,99 @@
         async function quietCaption(systemPrompt, userText) {
             const ctx = getST();
             const composed = systemPrompt + '\n\n' + userText;
+            const s = getSettings();
             ui.llmDiag = [];
 
-            if (ctx && typeof ctx.generateQuietPrompt === 'function') {
-                        let text = await llmStep('quiet prompt', () => ctx.generateQuietPrompt({
-                            quietPrompt: composed, quietName: 'image caption', removeReasoning: true,
-                        }));
-                        if (text) return { text, via: 'ST quiet prompt' };
-                        text = await llmStep('quiet prompt (reasoning kept)', () => ctx.generateQuietPrompt({
-                            quietPrompt: composed, quietName: 'image caption', removeReasoning: false,
-                        }));
-                        if (text) return { text, via: 'ST quiet prompt (reasoning kept)' };
-                        // quietToLoud sends the instruction in SYSTEM mode instead of the quiet
-                        // template — a different prompt assembly on ST's side, same API.
-                        text = await llmStep('quiet prompt (system mode)', () => ctx.generateQuietPrompt({
-                            quietPrompt: composed, quietName: 'image caption', quietToLoud: true,
-                            skipWIAN: true, responseLength: 500, removeReasoning: false,
-                        }));
-                        if (text) return { text, via: 'ST quiet prompt (system mode)' };
-                    }
+            // Every entry is a full attempt. A path that throws OR answers with an
+            // empty string moves on to the next one; nothing aborts the chain.
+            const steps = [];
+
+            const quiet = (ctx && typeof ctx.generateQuietPrompt === 'function') ? ctx.generateQuietPrompt : null;
+            if (quiet) {
+                steps.push({
+                    name: 'quiet prompt',
+                    run: () => quiet({ quietPrompt: composed, quietName: 'image caption', removeReasoning: true }),
+                });
+                steps.push({
+                    name: 'quiet prompt (reasoning kept)',
+                    run: () => quiet({ quietPrompt: composed, quietName: 'image caption', removeReasoning: false }),
+                });
+                // quietToLoud sends the instruction in SYSTEM mode instead of the quiet
+                // template: different prompt assembly on ST's side, same API.
+                steps.push({
+                    name: 'quiet prompt (system mode)',
+                    run: () => quiet({
+                        quietPrompt: composed, quietName: 'image caption', quietToLoud: true,
+                        skipWIAN: true, responseLength: 500, removeReasoning: false,
+                    }),
+                });
+            }
 
             if (typeof window.generateQuietPrompt === 'function'
                 && (!ctx || window.generateQuietPrompt !== ctx.generateQuietPrompt)) {
-                const text = await llmStep('global generateQuietPrompt', () => window.generateQuietPrompt({ quietPrompt: composed }));
-                if (text) return { text, via: 'global generateQuietPrompt' };
+                const g = window.generateQuietPrompt;
+                steps.push({ name: 'global generateQuietPrompt', run: () => g({ quietPrompt: composed }) });
             }
 
-            if (ctx && typeof ctx.generateRaw === 'function') {
-                const text = await llmStep('raw generation', () => ctx.generateRaw({
-                    prompt: userText, systemPrompt, responseLength: 240,
-                }));
-                if (text) return { text, via: 'ST raw generation' };
+            const raw = (ctx && typeof ctx.generateRaw === 'function') ? ctx.generateRaw : null;
+            if (raw) {
+                // jsonSchema makes ST enforce/extract the caption shape, so a working
+                // raw call yields JSON instead of prose. The prefill variant is the
+                // fallback for providers that ignore schemas.
+                steps.push({
+                    name: 'raw generation (json schema)',
+                    run: () => raw({
+                        prompt: userText, systemPrompt, responseLength: 500, jsonSchema: CAPTION_JSON_SCHEMA,
+                    }),
+                });
+                steps.push({
+                    name: 'raw generation (prefill)',
+                    run: () => raw({
+                        prompt: userText, systemPrompt, responseLength: 500, prefill: '{"prompt": "',
+                    }),
+                });
             }
 
-            const text = await llmStep('chat-completions endpoint', () => backendCaption(ctx, systemPrompt, userText));
-            if (text) return { text, via: 'chat-completions endpoint' };
+            steps.push({ name: 'chat-completions endpoint', run: () => backendCaption(ctx, systemPrompt, userText) });
+
+            // Dead-path memory. The ORDER never changes (quality first), but a path
+            // that answered with nothing is remembered and skipped next time, so a
+            // phone where the quiet prompt is broken does not burn 1-3 s per caption
+            // rediscovering it. If every remembered-dead path is all that is left,
+            // the memory is cleared and everything is tried once more.
+            if (!s.llmDead || typeof s.llmDead !== 'object') s.llmDead = {};
+            // Entries expire: a provider hiccup must not blacklist a path forever.
+            const DEAD_TTL_MS = 5 * 60 * 1000;
+            Object.keys(s.llmDead).forEach((k) => {
+                if (!(Date.now() - Number(s.llmDead[k]) < DEAD_TTL_MS)) delete s.llmDead[k];
+            });
+            const attempt = async (list) => {
+                for (const step of list) {
+                    const text = await llmStep(step.name, step.run);
+                    if (!text) {
+                        s.llmDead[step.name] = Date.now();
+                        continue;
+                    }
+                    if (s.llmDead[step.name]) delete s.llmDead[step.name];
+                    saveSettings();
+                    return { text, via: step.name };
+                }
+                return null;
+            };
+
+            const live = steps.filter((x) => !s.llmDead[x.name]);
+            if (live.length !== steps.length) {
+                saveSettings();
+                const found = await attempt(live);
+                if (found) return found;
+                s.llmDead = {}; // the memory went stale: forget it and retry everything
+                ui.llmDiag = [];
+                const again = await attempt(steps);
+                if (again) return again;
+            } else {
+                const found = await attempt(steps);
+                if (found) return found;
+            }
 
             throw new Error('no LLM path produced an answer — ' + diagSummary());
         }
@@ -1133,7 +1212,8 @@
                         'api=' + ((ctx && (ctx.mainApi || ctx.main_api)) || '?'),
                         'source=' + (oai.chat_completion_source || '-'),
                         'model=' + (model || '-'),
-                    ].join(' ');
+                                        'dead=' + (Object.keys(getSettings().llmDead || {}).length ? Object.keys(getSettings().llmDead).join(',') : 'none'),
+                                    ].join(' ');
 
                     const paint = (extra) => {
                         if (!rows) return;
