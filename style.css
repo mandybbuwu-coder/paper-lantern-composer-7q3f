@@ -601,6 +601,19 @@
     padding: 1px 0;
 }
 
+.csc-diag-head {
+    opacity: 0.65;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, #4a3f33);
+    margin-bottom: 3px;
+    padding-bottom: 3px;
+}
+
+.csc-version {
+    font-size: 0.78em;
+    opacity: 0.6;
+    margin-left: 4px;
+}
+
 .csc-diag-ok {
     color: #7fbf7f;
 }

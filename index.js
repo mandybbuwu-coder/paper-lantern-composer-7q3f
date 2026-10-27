@@ -52,6 +52,7 @@
 
     const MODULE_NAME = 'comfy_studio_composer';
     const LOG = '[ComfyStudioComposer]';
+        const VERSION = '1.5.1';
     const DEFAULT_BASE_URL = 'http://127.0.0.1:8090';
     const POLL_INTERVAL_MS = 800;
     const ROOT_ID = 'csc_root';
@@ -396,7 +397,7 @@
 
       <div class="csc-section">
         <div class="csc-row csc-row-between">
-          <span class="csc-status"><i id="csc_dot" class="csc-dot csc-dot-off"></i><span id="csc_status">connecting…</span></span>
+          <span class="csc-status"><i id="csc_dot" class="csc-dot csc-dot-off"></i><span id="csc_status">connecting…</span><span id="csc_version" class="csc-muted csc-version"></span></span>
           <button id="csc_reload" class="menu_button csc-btn-sm" title="Reload models / LoRAs from comfy-studio">↻ Reload</button>
         </div>
         <div id="csc_warn" class="csc-warn" hidden></div>
@@ -411,9 +412,10 @@
                   <span id="csc_caption_via" class="csc-muted csc-caption-via"></span>
                 </div>
                 <div class="csc-row csc-row-between csc-mt-xs">
-                  <button id="csc_test_llm" class="csc-linklike" title="Try every LLM path and show what each one answered (no image is rendered)">⚡ test LLM</button>
-                  <button id="csc_test_overlay" class="csc-linklike" title="Pin the chat overlay for 8s so you can see what it looks like">◉ show overlay</button>
-                </div>
+                          <button id="csc_test_llm" class="csc-linklike" title="Try every LLM path and show what each one answered (no image is rendered)">⚡ test LLM</button>
+                          <button id="csc_diag_copy" class="csc-linklike" title="Copy the diagnostics to the clipboard so you can paste them in a chat">📋 copy</button>
+                          <button id="csc_test_overlay" class="csc-linklike" title="Pin the chat overlay for 8s so you can see what it looks like">◉ show overlay</button>
+                        </div>
                 <div id="csc_llm_diag" class="csc-diag" hidden></div>
         <div id="csc_caption_wrap" class="csc-caption-wrap" hidden>
           <div class="csc-label csc-caption-label">Prompt used</div>
@@ -1019,15 +1021,22 @@
             ui.llmDiag = [];
 
             if (ctx && typeof ctx.generateQuietPrompt === 'function') {
-                let text = await llmStep('quiet prompt', () => ctx.generateQuietPrompt({
-                    quietPrompt: composed, quietName: 'image caption', removeReasoning: true,
-                }));
-                if (text) return { text, via: 'ST quiet prompt' };
-                text = await llmStep('quiet prompt (reasoning kept)', () => ctx.generateQuietPrompt({
-                    quietPrompt: composed, quietName: 'image caption', removeReasoning: false,
-                }));
-                if (text) return { text, via: 'ST quiet prompt (reasoning kept)' };
-            }
+                        let text = await llmStep('quiet prompt', () => ctx.generateQuietPrompt({
+                            quietPrompt: composed, quietName: 'image caption', removeReasoning: true,
+                        }));
+                        if (text) return { text, via: 'ST quiet prompt' };
+                        text = await llmStep('quiet prompt (reasoning kept)', () => ctx.generateQuietPrompt({
+                            quietPrompt: composed, quietName: 'image caption', removeReasoning: false,
+                        }));
+                        if (text) return { text, via: 'ST quiet prompt (reasoning kept)' };
+                        // quietToLoud sends the instruction in SYSTEM mode instead of the quiet
+                        // template — a different prompt assembly on ST's side, same API.
+                        text = await llmStep('quiet prompt (system mode)', () => ctx.generateQuietPrompt({
+                            quietPrompt: composed, quietName: 'image caption', quietToLoud: true,
+                            skipWIAN: true, responseLength: 500, removeReasoning: false,
+                        }));
+                        if (text) return { text, via: 'ST quiet prompt (system mode)' };
+                    }
 
             if (typeof window.generateQuietPrompt === 'function'
                 && (!ctx || window.generateQuietPrompt !== ctx.generateQuietPrompt)) {
@@ -1114,41 +1123,76 @@
 
         /** Run every LLM path and report each outcome in the panel (phone has no console). */
         async function diagnoseLLM() {
-            const rows = $('csc_llm_diag');
-            if (rows) { rows.hidden = false; rows.textContent = 'testing the LLM paths…'; }
-            const scene = gatherSceneContext();
-            try {
-                const { text, via } = await quietCaption(CAPTION_SYSTEM_PROMPT, scene.userPayload);
-                if (rows) {
-                    rows.innerHTML = '';
-                    (ui.llmDiag || []).forEach((r) => {
-                        const d = document.createElement('div');
-                        d.className = 'csc-diag-row ' + (r.ok ? 'csc-diag-ok' : 'csc-diag-fail');
-                        d.textContent = `${r.ok ? '✓' : '✕'} ${r.path}: ${r.detail}`;
-                        rows.appendChild(d);
-                    });
-                    const last = document.createElement('div');
-                    last.className = 'csc-diag-row csc-diag-ok';
-                    last.textContent = `→ used: ${via} (${String(text).trim().length} chars)`;
-                    rows.appendChild(last);
+                    const rows = $('csc_llm_diag');
+                    const ctx = getST();
+                    let model = '';
+                    try { if (ctx && typeof ctx.getChatCompletionModel === 'function') model = ctx.getChatCompletionModel(); } catch (err) { /* ignore */ }
+                    const oai = (ctx && ctx.chatCompletionSettings) || {};
+                    const contextLine = [
+                        'ext v' + VERSION,
+                        'api=' + ((ctx && (ctx.mainApi || ctx.main_api)) || '?'),
+                        'source=' + (oai.chat_completion_source || '-'),
+                        'model=' + (model || '-'),
+                    ].join(' ');
+
+                    const paint = (extra) => {
+                        if (!rows) return;
+                        rows.innerHTML = '';
+                        const head = document.createElement('div');
+                        head.className = 'csc-diag-row csc-diag-head';
+                        head.textContent = contextLine;
+                        rows.appendChild(head);
+                        (ui.llmDiag || []).forEach((r) => {
+                            const d = document.createElement('div');
+                            d.className = 'csc-diag-row ' + (r.ok ? 'csc-diag-ok' : 'csc-diag-fail');
+                            d.textContent = `${r.ok ? '✓' : '✕'} ${r.path}: ${r.detail}`;
+                            rows.appendChild(d);
+                        });
+                        if (extra) {
+                            const last = document.createElement('div');
+                            last.className = 'csc-diag-row ' + extra.cls;
+                            last.textContent = extra.text;
+                            rows.appendChild(last);
+                        }
+                        ui.llmDiagText = contextLine + '\n' + rows.textContent.split('\n').slice(1).join('\n');
+                    };
+
+                    if (rows) { rows.hidden = false; rows.textContent = 'testing the LLM paths…'; }
+                    const scene = gatherSceneContext();
+                    try {
+                        const { text, via } = await quietCaption(CAPTION_SYSTEM_PROMPT, scene.userPayload);
+                        paint({ cls: 'csc-diag-ok', text: `→ used: ${via} (${String(text).trim().length} chars)` });
+                        toast('success', 'LLM answered via ' + via);
+                        return { text, via };
+                    } catch (err) {
+                        const msg = (err && err.message) ? err.message : String(err);
+                        paint({ cls: 'csc-diag-fail', text: '→ all paths failed' });
+                        toast('error', 'Every LLM path failed. ' + msg);
+                        return null;
+                    }
                 }
-                toast('success', 'LLM answered via ' + via);
-                return { text, via };
-            } catch (err) {
-                const msg = (err && err.message) ? err.message : String(err);
-                if (rows) {
-                    rows.innerHTML = '';
-                    (ui.llmDiag || []).forEach((r) => {
-                        const d = document.createElement('div');
-                        d.className = 'csc-diag-row ' + (r.ok ? 'csc-diag-ok' : 'csc-diag-fail');
-                        d.textContent = `${r.ok ? '✓' : '✕'} ${r.path}: ${r.detail}`;
-                        rows.appendChild(d);
-                    });
+
+                /** Copy the diagnostics to the clipboard (easy to paste from a phone). */
+                async function copyDiagnostics() {
+                    const text = String(ui.llmDiagText || '').trim() || 'run ⚡ test LLM first';
+                    try {
+                        if (navigator.clipboard && navigator.clipboard.writeText) {
+                            await navigator.clipboard.writeText(text);
+                        } else {
+                            const ta = document.createElement('textarea');
+                            ta.value = text;
+                            ta.style.position = 'fixed';
+                            ta.style.opacity = '0';
+                            document.body.appendChild(ta);
+                            ta.select();
+                            document.execCommand('copy');
+                            ta.remove();
+                        }
+                        toast('success', 'Diagnostics copied — paste them in the chat.');
+                    } catch (err) {
+                        toast('warning', 'Could not copy: ' + (err && err.message ? err.message : err));
+                    }
                 }
-                toast('error', 'Every LLM path failed. ' + msg);
-                return null;
-            }
-        }
 
     /**
      * Clean the LLM reply into a single line of image tags, following ST's own
@@ -1619,7 +1663,7 @@ ${lastText}`
                                                     ui.captionVia = 'fallback: last message text';
                             ui.captionNegative = '';
                             setStatusLine('LLM gave no caption — using the message text');
-                            toast('warning', 'No caption from the LLM (' + msg + ') — using the message text.');
+                            toast('warning', 'No caption from the LLM (' + msg + ') — using the message text. Press ⚡ test LLM then 📋 copy to see why.');
                         } else {
                             setError("ST couldn't run a quiet prompt and the message is empty. " + msg);
                             setStatusLine('caption failed — use Advanced');
@@ -2223,7 +2267,9 @@ ${lastText}`
         const regen = $('csc_regenerate_caption');
                 if (regen) regen.addEventListener('click', regenerateCaption);
                 const testLlm = $('csc_test_llm');
-                if (testLlm) testLlm.addEventListener('click', diagnoseLLM);
+                                if (testLlm) testLlm.addEventListener('click', diagnoseLLM);
+                                const diagCopy = $('csc_diag_copy');
+                                if (diagCopy) diagCopy.addEventListener('click', copyDiagnostics);
                 const testOverlay = $('csc_test_overlay');
                         if (testOverlay) testOverlay.addEventListener('click', pillDemo);
 
@@ -2335,7 +2381,9 @@ ${lastText}`
         autoGrow($('csc_prompt'));
         autoGrow($('csc_negative'));
         const meta = await refreshMeta();
-                if (meta) syncFormFromSettings();
+                        if (meta) syncFormFromSettings();
+                        const verEl = $('csc_version');
+                        if (verEl) verEl.textContent = ' · v' + VERSION;
                 refreshSheetUi();
         refreshHistory().catch(() => {});
     }
@@ -2367,6 +2415,8 @@ ${lastText}`
         buildSceneCaption,
         quietCaption,
                 diagnoseLLM,
+        copyDiagnostics,
+        VERSION,
                 pillDemo,
                 characterKey,
                 sheetOf,

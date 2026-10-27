@@ -133,6 +133,21 @@ If **all four** fail, the caption falls back to the message text and the image
 still renders. **⚡ test LLM** in the panel runs the chain and prints one row per
 path (green = answered, red = why not) — useful on a phone, where there is no console.
 
+### When the caption LLM keeps failing (v1.5.1)
+
+The panel header now shows the **loaded build** (`v1.5.1`) — if it says anything
+else, ST is still running cached code and the fixes are not in.
+
+**⚡ test LLM** runs the whole chain and prints one row per path plus a context
+line (`ext v… api=… source=… model=…`). **📋 copy** puts it on the clipboard so it
+can be pasted into a chat — no console needed on a phone.
+
+The chain is now five paths: quiet prompt → quiet prompt keeping reasoning →
+quiet prompt in **system mode** (`quietToLoud`, a different prompt assembly) →
+`generateRaw()` → ST's chat-completions endpoint. Only when all five fail does
+the caption fall back to the message text, and the toast tells you to run the
+diagnostics.
+
 ### Character coherence (v1.5)
 
 Without a LoRA, the only thing that keeps the same person across images is
