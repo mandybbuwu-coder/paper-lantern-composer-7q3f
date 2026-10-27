@@ -1,18 +1,38 @@
-# Comfy Studio Prompt Composer — SillyTavern extension
+# Comfy Studio Scene Generator — SillyTavern extension
 
-A SillyTavern **third-party UI extension** (classic layout, **no build step**, no npm) that adds a
-robust image-prompt composer inside SillyTavern's Extensions drawer. It talks to your local
-**comfy-studio** service (FastAPI in front of ComfyUI, default `http://127.0.0.1:8090`) and gives you:
+A SillyTavern **third-party UI extension** (classic layout, **no build step**, no npm) that turns
+image generation into **one button**. It talks to your local **comfy-studio** service (FastAPI in
+front of ComfyUI, default `http://127.0.0.1:8090`).
+
+**v1.1.0 — one-button flow.** A single primary button, **Generate scene**, does the whole pipeline
+with no typing:
+
+1. reads the chat (last N messages, stripped of HTML), the character's card appearance fields
+   (`description` / `first_mes`) and the persona name;
+2. asks **SillyTavern's own configured LLM** for ONE image caption (a hidden "quiet" completion);
+3. POSTs that caption to comfy-studio `/api/generate` with the selected model/params;
+4. shows the image and **attaches it to the last chat message as message media** — the same
+   mechanism ST's Image Generation uses — with **no new turn and nothing sent**.
+
+A secondary **↻ regenerate caption** link re-runs *only* the caption step (a bad caption can be
+redone without spending a render). The manual composer (prompt, negative, model, LoRAs, sampler,
+steps, cfg, size, batch, seed) still exists, collapsed behind an **Advanced** disclosure that is
+**closed by default**.
+
+Other features:
 
 - explicit **model / LoRA / sampler / scheduler / steps / cfg / size / batch / seed** control
 - **LoRA rows** with weights; LoRAs the backend marks incompatible for the current model are greyed out
-- an auto-growing **prompt** and **negative prompt** composer
-- **"Pull character/scene context"** — one click prefills the prompt from the last N chat messages and
-  the character card's appearance text (no LLM call, purely local)
+- a fixed **floating progress pill** (on `<body>`, not in the panel) that stays visible while a job
+  runs — even with the settings drawer closed and you typing in the chat — showing an honest
+  phase + percentage (`Queued` → `Generating image` / `loading model` → step N/M)
+- an auto-growing **prompt** and **negative prompt** composer (Advanced)
 - a **progress bar** polled from `/api/job/{id}` every ~800 ms, with the backend's error shown verbatim
-- a **result thumbnail** with **Insert into chat** (appends `![generated image](url)` markdown to the
-  chat input) and **Copy image URL**
+- a **result thumbnail** with **Insert** (attaches the image to the last message; never sends) and
+  **Copy image URL**
 - **prompt history** from `/api/history`, click a row to load its prompt + parameters back into the composer
+
+No typing, no prompts to write, nothing auto-sent.
 
 ---
 
@@ -27,11 +47,11 @@ The extension folder must live under SillyTavern's `data/<user-handle>/extension
 2. Paste the repository URL:
 
    ```
-   https://github.com/mandybbuwu-coder/paper-lantern-composer-7q3f
+   https://github.com/your-user/st-comfy-studio-composer
    ```
 
    *(placeholder — replace with your real repo URL once you push this folder).*
-3. Reload SillyTavern. The panel appears under **Extensions** → *Comfy Studio — Prompt Composer*.
+3. Reload SillyTavern. The panel appears under **Extensions** → *Comfy Studio — Scene Generator*.
 
 ### Option B — manual copy
 
@@ -43,65 +63,85 @@ Copy this whole folder into SillyTavern, keeping the folder name:
     index.js
     style.css
     README.md
-    dev/            (harness + relay — not needed at runtime)
+    dev/            (offline harness — not needed at runtime)
 ```
 
 Reload the page (F5).
 
 ---
 
+## How it works
+
+One button: **Generate scene**.
+
+1. It reads the last N chat messages (setting, default 6) plus the character card's
+   appearance fields and your persona name.
+2. It asks **the LLM you already have configured in SillyTavern** for a single
+   image caption (subject, appearance, clothing, pose, setting, light, camera).
+   No second model, no API key, no typing.
+3. It appends your **style suffix**, skipping tags the caption already has.
+4. It sends the caption to comfy-studio and polls the job.
+5. The finished image is **attached to the last chat message as media** — no new
+   turn, nothing is auto-sent, so no LLM reply is triggered.
+
+**↻ regenerate caption** re-runs only step 2 when the caption came out wrong —
+no render is wasted.
+
+A floating pill above the chat input shows progress while a job runs, even with
+the settings drawer closed: `Generating image… 43%` with `step 11/25` underneath.
+Cold model loads report `loading model` and advance 8→25% on a timer instead of
+sitting at 0%.
+
 ## Settings
 
-Open **Extensions** → *Comfy Studio — Prompt Composer*.
+**Extensions** → *Comfy Studio — Scene Generator*.
 
-| Control | Meaning |
-|---|---|
-| **comfy-studio base URL** | Absolute base of the service. Default `http://127.0.0.1:8090`. **Change this here** — the browser calls it cross-origin from the SillyTavern origin, so the service must send CORS headers (see Troubleshooting). If ST runs in Docker/WSL, use `http://host.docker.internal:8090` or your LAN IP. |
-| **Model** | Populated from `GET /api/meta`. Selecting a model re-fetches `GET /api/meta?model=<id>` (to recompute LoRA compatibility) and applies that model's defaults to steps/cfg/sampler/scheduler/size. |
-| **LoRAs** | `+ Add LoRA` adds a row (name + weight). Incompatible entries are disabled/greyed. |
-| **Sampler / Scheduler** | From `/api/meta` `samplers` / `schedulers`. |
-| **Steps / CFG** | Sliders; persisted with the rest of your settings. |
-| **Size** | Presets plus free width/height (multiples of 8). |
-| **Batch / Seed** | `-1` = random; the dice button fills a concrete random seed. |
-| **Generate / Interrupt** | Queues a job (`POST /api/generate`) and polls it; Interrupt calls `POST /api/interrupt`. |
-| **Pull character/scene context** | Prefills the prompt from the last messages + character description. |
+| Control | Default | Meaning |
+|---|---|---|
+| **comfy-studio base URL** | `https://jose.tail7a8ecd.ts.net:10000` | Where the service lives. On the PC use `http://127.0.0.1:8090`. It is called cross-origin, so the service must send CORS headers (it does). |
+| **Auto-insert image into the chat** | on | Attach the result to the last message. Off = only show it in the panel. |
+| **Style suffix** | `anime illustration, cinematic lighting, highly detailed, 35mm film grain` | Appended to every caption. Duplicated tags are dropped. |
+| **Caption model** | *(empty = same as chat)* | Optional model name passed to the quiet-prompt call. |
+| **Chat messages to read** | `6` | How much recent chat feeds the caption. |
 
-Everything is stored in `extensionSettings['comfy_studio_composer']` (persisted via
-`saveSettingsDebounced()`), the documented persistent-settings mechanism.
+Everything below lives in the collapsed **Advanced — manual prompt & parameters**
+disclosure (closed by default): manual prompt override, negative prompt, model,
+LoRA rows, sampler/scheduler, steps, CFG, size, batch, seed. LoRAs whose declared
+family does not match the selected model are greyed out with the reason.
 
-`contextMessages` (default `3`) controls how many recent chat messages the context-pull uses. It is
-in the settings object but has no UI control yet — edit it in `defaultSettings` in `index.js` if you
-want a different default.
+All of it is stored in `extensionSettings['comfy_studio_composer']` and persisted
+with `saveSettingsDebounced()`, the documented ST mechanism.
 
 ---
 
 ## Verification harness (`dev/`)
 
-`dev/harness.html` runs the panel **outside SillyTavern** against the **real** comfy-studio API — it
-does not fake any response. It stubs exactly the SillyTavern surface the extension uses
-(`SillyTavern.getContext()` with `extensionSettings`, `saveSettingsDebounced`, `eventSource`,
-`event_types`, `chat`, `characters`, `characterId`, `name1`, `name2`) plus `toastr` and the
-`#extensions_settings2` / `#send_textarea` containers.
+`dev/harness.html` runs the panel **outside SillyTavern** against the **real**
+comfy-studio API. It stubs only the SillyTavern surface the extension uses
+(`SillyTavern.getContext()`, `extensionSettings`, `saveSettingsDebounced`,
+`eventSource`, `event_types`, `chat`, `characters`, `characterId`, `name1`,
+`name2`, `generateQuietPrompt`), plus `toastr` and the `#extensions_settings2` /
+`#send_textarea` / `.mes` containers. Nothing else is faked: the caption comes
+from a stub, but the image is a real render.
 
 ```bash
-# From this folder. dev/relay.mjs serves the folder and relays /api/* to 127.0.0.1:8090.
-node dev/relay.mjs 8091
+# from this folder (any static server works; CORS is enabled on comfy-studio)
+python -m http.server 8094 --bind 127.0.0.1
 # then open:
-#   http://127.0.0.1:8091/dev/harness.html                 # full run (queues ONE real 512x512 / 8-step job)
-#   http://127.0.0.1:8091/dev/harness.html?skipGenerate=1  # replay a real image from /api/history (no new job)
+#   http://127.0.0.1:8094/dev/harness.html?base=http://127.0.0.1:8090
+#   append &skipGenerate=1 to reuse an image from /api/history (no new render)
 ```
 
-The harness asserts: panel renders; models load from `/api/meta`; the status line reports ComfyUI
-online; a LoRA row populates from the catalog; context-pull prefills from chat; the payload targets
-MOSS-Image at 512×512 / 8 steps; a **real generation** returns an image whose PNG decodes
-(`naturalWidth > 0`); the result URL is absolute against the base; *Insert into chat* writes markdown
-into `#send_textarea`; history loads from `/api/history`.
+27 assertions, all printed as `PASS`/`FAIL`: panel mounts, models load, Advanced
+starts closed, LoRA catalog populates, the single button runs the caption step with
+an **empty** prompt box, `POST /api/generate` carries that caption, the PNG decodes,
+the URL is absolute, the image is attached to the last message as media with
+`saveChat()` called and **nothing auto-sent**, *regenerate caption* issues no
+render, the floating pill exists outside the panel with `role=status`,
+`aria-live=polite`, `pointer-events:none`, shows a phase plus a 1-100% number,
+maps cold start to 8-25% with `loading model`, and hides when the job ends.
 
-> **`dev/relay.mjs` is a DEV-ONLY verification shim.** It exists *only* because comfy-studio does not
-> yet send CORS headers, so a page on a different origin cannot call it directly. The relay puts the
-> harness and the API on the same origin and forwards **real** bytes/JSON from the live service — it
-> never invents a response. Once comfy-studio enables CORS you can drop the relay and point the
-> harness (or the panel) straight at `http://127.0.0.1:8090`.
+The parent app must be reachable: `curl http://127.0.0.1:8090/api/health`.
 
 ---
 
@@ -131,8 +171,10 @@ app.add_middleware(
 )
 ```
 
-While CORS is missing, only the `dev/relay.mjs` harness can reach the service from a browser page (it
-serves the page and the API on the same origin).
+Comfy-studio sends CORS headers for localhost/private-LAN/tailnet origins, so a browser page on the
+ST origin can call it directly. If you see a CORS error, the origin is outside that list — open
+`http://127.0.0.1:8090/api/meta` in the same browser to confirm the service is up, then check the
+allow-list in comfy-studio's `app.py`.
 
 **"comfy-studio unreachable" but CORS is fine.**
 Check the service is actually up: `curl http://127.0.0.1:8090/api/health` → `{"ok":true,"comfy":true}`.
@@ -164,7 +206,6 @@ index.js         the extension (no build step; entry point on window.ComfyStudio
 style.css        styles, scoped under .csc-root, using ST theme vars with a warm-dark fallback
 README.md        this file
 dev/harness.html offline harness (real API, stubbed ST context)
-dev/relay.mjs    dev-only same-origin relay for the harness
 dev/*.png        harness screenshots
 ```
 
@@ -188,19 +229,3 @@ official extensions ([Prompt Inspector](https://github.com/SillyTavern/Extension
 ## License
 
 AGPL-3.0 (matches SillyTavern's extension requirements).
----
-
-## Repo de este proyecto
-
-- **Repo (público, cuenta desechable):** https://github.com/mandybbuwu-coder/paper-lantern-composer-7q3f
-- **URL para SillyTavern (Install extension):**
-
-  ```
-  https://github.com/mandybbuwu-coder/paper-lantern-composer-7q3f
-  ```
-
-- **Actualizar:** editar los archivos aquí y ejecutar `~/st-push.sh "mensaje"`.
-  El token del repo está en `~/.config/comfy-studio/github_token_mandybbuwu`
-  (cuenta desechable, solo escribe en el repo de la extensión).
-- **No pongas nada privado en este repo**: es público y el nombre es lo único
-  que lo mantiene poco visible.

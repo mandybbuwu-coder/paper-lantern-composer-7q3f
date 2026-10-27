@@ -360,3 +360,160 @@
     font-size: 0.72em;
     font-style: normal;
 }
+/* ------------------------------------------------------------------ */
+/* v1.1.0 — one-button flow                                            */
+/* ------------------------------------------------------------------ */
+
+.csc-root .csc-primary-block {
+    border-color: var(--csc-accent);
+    background: color-mix(in srgb, var(--csc-accent) 12%, transparent);
+}
+
+.csc-root .csc-btn-hero {
+    width: 100%;
+    font-size: 1.12em;
+    font-weight: 700;
+    padding: 11px 12px;
+    letter-spacing: 0.02em;
+    border: 1px solid var(--csc-accent) !important;
+    color: var(--csc-accent-strong) !important;
+    background: color-mix(in srgb, var(--csc-accent) 18%, transparent);
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+.csc-root .csc-btn-hero:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--csc-accent) 30%, transparent);
+}
+
+.csc-root .csc-btn-hero:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+.csc-root .csc-hero-hint {
+    font-size: 0.8em;
+    color: var(--csc-muted);
+    margin-top: 6px;
+}
+
+.csc-root .csc-linklike {
+    background: none;
+    border: none;
+    color: var(--csc-accent);
+    cursor: pointer;
+    font-size: 0.82em;
+    padding: 0;
+    text-decoration: underline dotted;
+}
+
+.csc-root .csc-caption-via {
+    font-style: normal;
+    font-size: 0.72em;
+}
+
+.csc-root .csc-caption-wrap {
+    margin-top: 7px;
+    padding: 6px 8px;
+    border: 1px dashed var(--csc-border);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--csc-panel) 70%, transparent);
+}
+
+.csc-root .csc-caption-label {
+    margin-bottom: 2px;
+}
+
+.csc-root .csc-caption-preview {
+    font-size: 0.82em;
+    color: var(--csc-text);
+    word-break: break-word;
+    white-space: pre-wrap;
+}
+
+.csc-root .csc-check-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.86em;
+    cursor: pointer;
+}
+
+.csc-root .csc-advanced {
+    border: 1px solid var(--csc-border);
+    border-radius: 8px;
+    padding: 4px 10px 10px;
+    margin-bottom: 8px;
+}
+
+.csc-root .csc-advanced-summary {
+    cursor: pointer;
+    font-size: 0.86em;
+    color: var(--csc-accent);
+    padding: 4px 0;
+    list-style: none;
+}
+
+.csc-root .csc-advanced-summary::-webkit-details-marker {
+    display: none;
+}
+
+.csc-root .csc-advanced-summary::before {
+    content: "▸ ";
+}
+
+.csc-root .csc-advanced[open] .csc-advanced-summary::before {
+    content: "▾ ";
+}
+
+.csc-root .csc-advanced-body {
+    margin-top: 4px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Floating progress pill (outside .csc-root: lives on <body>)         */
+/* Visible even when the settings drawer is closed.                    */
+/* ------------------------------------------------------------------ */
+
+.csc-pill {
+    position: fixed;
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: 96px; /* overridden inline with the #send_form height + 8px */
+    z-index: 2147483000;
+    pointer-events: none;
+    box-sizing: border-box;
+    max-width: min(92vw, 460px);
+    padding: 8px 16px;
+    border-radius: 999px;
+    text-align: center;
+    font-family: inherit;
+    color: var(--SmartThemeBodyColor, #e8e2d8);
+    background: var(--SmartThemeBlurTintColor, #221e1a);
+    border: 1px solid var(--SmartThemeBorderColor, #4a3f33);
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+    opacity: 0.97;
+}
+
+.csc-pill[hidden] {
+    display: none;
+}
+
+.csc-pill-phase {
+    font-size: 0.95em;
+    font-weight: 600;
+    line-height: 1.25;
+    font-variant-numeric: tabular-nums;
+}
+
+.csc-pill-detail {
+    margin-top: 1px;
+    font-size: 0.76em;
+    opacity: 0.8;
+    line-height: 1.2;
+    word-break: break-word;
+}
+
+.csc-pill-detail:empty {
+    display: none;
+}
