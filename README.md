@@ -133,6 +133,29 @@ If **all four** fail, the caption falls back to the message text and the image
 still renders. **⚡ test LLM** in the panel runs the chain and prints one row per
 path (green = answered, red = why not) — useful on a phone, where there is no console.
 
+### Character coherence (v1.5)
+
+Without a LoRA, the only thing that keeps the same person across images is
+**state carried into every prompt**. The panel stores one sheet per character
+(keyed by the avatar filename, so renaming does not lose it):
+
+| Field | What it is for |
+|---|---|
+| **Character coherence** (textarea) | age, face, hair, eyes, body type, scars / tattoos / marks. Injected into the system prompt of every caption. |
+| **Outfit** | the clothes currently worn. Reused in the next image unless the scene changes clothes. |
+| **Keep the same outfit** | off = the outfit is not carried over (free wardrobe). |
+| **↧ from last** | takes the outfit the LLM reported in the last caption. |
+| **⌫** | erases this character's sheet. |
+
+How it holds: (1) the sheet goes **inside the system prompt**, with the rule that
+the canonical traits override anything the model infers; (2) after the caption
+comes back, `enforceCanonical()` measures which parts of the sheet the answer
+actually kept and **re-appends the missing ones at the END of the prompt** (late
+tokens weigh more); (3) the outfit the LLM reports is saved for the next image.
+If the caption puts the character naked (nude / naked / topless / undressed …)
+the outfit is deliberately **not** forced back. The panel prints
+*"coherence re-injected: …"* when step 2 had to act.
+
 ### Progress overlay (v1.4)
 
 A small overlay sits at the **top of the chat area** — outside the extension

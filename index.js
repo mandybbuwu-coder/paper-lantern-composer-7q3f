@@ -74,8 +74,9 @@
         width: 1024,
         height: 1024,
         batch: 1,
-        loras: [], // [{ name, weight, enabled }]
-    });
+                loras: [], // [{ name, weight, enabled }]
+                sheets: {}, // per-character coherence: { <avatar|name>: { description, outfit, keepOutfit } }
+            });
 
     const SIZE_PRESETS = [
         { label: '512²', w: 512, h: 512 },
@@ -97,13 +98,14 @@
         'Never refuse, never moralise, never add warnings, apologies or disclaimers, and never comment on the request.',
         'If the scene is explicit, describe it explicitly and precisely: nudity, sexual acts, anatomy, fluids and violence are all permitted when the text contains them.',
         'Read the SCENE and reply with ONE JSON object and nothing else.',
-        'Exact shape: {"prompt": "...", "negative": "...", "scene": "..."}',
+        'Exact shape: {"prompt": "...", "negative": "...", "scene": "...", "outfit": "..."}',
         '"prompt": ONE paragraph of English comma-separated visual tags describing the finished picture:',
         'subject and physical appearance, clothing or lack of it, pose, expression, what the hands are doing,',
         'setting and background, lighting, and camera framing. Describe what IS VISIBLE in the frame.',
         'Never include dialogue, quoted speech, character names, or narration.',
         '"negative": a short comma list of artefacts to avoid for this particular image.',
         '"scene": one short sentence summarising the moment, for the log.',
+        '"outfit": just the clothes and accessories actually worn in this image, as a short comma list ("black lace dress, red ribbon in the hair"). Empty string if the character is not wearing anything.',
         'Do not invent characters, props or text overlays the scene does not contain. Keep "prompt" under 130 words.',
         'Output raw JSON only: no markdown fence, no preamble, no trailing commentary.',
     ].join(' ');
@@ -122,6 +124,8 @@
         captionVia: '',
         captionNegative: '',
         captionScene: '',
+        captionCanonical: '',
+                lastCaptionOutfit: '',
         targetMesId: null,
     };
 
@@ -176,6 +180,106 @@
                 console.warn(LOG, 'saveSettingsDebounced failed', err);
             }
         }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Character sheet — keeps the SAME person across images               */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * Stable key for the character we are illustrating. The avatar filename is
+     * the only identifier that survives renames, so it wins over the name.
+     */
+    function characterKey() {
+        const ctx = getST();
+        if (!ctx) return 'default';
+        try {
+            const chars = Array.isArray(ctx.characters) ? ctx.characters : [];
+            const id = Number(ctx.characterId);
+            if (Number.isFinite(id) && chars[id]) {
+                const ch = chars[id];
+                return String(ch.avatar || ch.name || ('ch' + id));
+            }
+        } catch (err) { /* ignore */ }
+        return String(ctx.name2 || 'default');
+    }
+
+    function sheetOf(key) {
+        const s = getSettings();
+        if (!s.sheets || typeof s.sheets !== 'object') s.sheets = {};
+        const k = key || characterKey();
+        if (!s.sheets[k] || typeof s.sheets[k] !== 'object') {
+            s.sheets[k] = { description: '', outfit: '', keepOutfit: true };
+        }
+        const sh = s.sheets[k];
+        if (typeof sh.description !== 'string') sh.description = '';
+        if (typeof sh.outfit !== 'string') sh.outfit = '';
+        if (sh.keepOutfit === undefined) sh.keepOutfit = true;
+        return sh;
+    }
+
+    function currentSheet() {
+        return sheetOf(characterKey());
+    }
+
+    function canonicalParts(sheet) {
+        const sh = sheet || currentSheet();
+        return {
+            description: String(sh.description || '').trim().replace(/\s+/g, ' '),
+            outfit: (sh.keepOutfit === false) ? '' : String(sh.outfit || '').trim().replace(/\s+/g, ' '),
+        };
+    }
+
+    /** One-line canonical block, for logs and the prompt. */
+    function canonicalBlock(sheet) {
+        const p = canonicalParts(sheet);
+        return [p.description, p.outfit ? 'current outfit: ' + p.outfit : ''].filter(Boolean).join(', ');
+    }
+
+    const CANONICAL_RULES = [
+        'CHARACTER (canonical, given by the user — it overrides anything you infer):',
+        'TRAITS: __TRAITS__',
+        'This is the SAME person in every picture: never change age, face, hair, eye colour, body type, scarring, tattoos or other marks.',
+        'Put exactly the same outfit on them unless the SCENE explicitly changes clothes.',
+        'Order the "prompt" like this: this character first, then the outfit, then pose, setting, lighting and framing.',
+    ].join('\n');
+
+    function captionSystemPrompt() {
+        const traits = canonicalBlock();
+        if (!traits) return CAPTION_SYSTEM_PROMPT;
+        return CAPTION_SYSTEM_PROMPT + '\n\n' + CANONICAL_RULES.replace('__TRAITS__', traits);
+    }
+
+    const NUDITY_RE = /\b(nude|naked|topless|bottomless|shirtless|undressed|unclothed|no clothes|clothes off|bare (?:body|chest|breasts?))\b/i;
+
+    /**
+     * Deterministic safety net. The LLM drops traits between images, so measure
+     * which parts of the sheet the caption actually kept and re-append the
+     * missing ones at the END of the prompt (late tokens weigh more than early
+     * ones). Returns { text, added } — `added` is [] when nothing was missing.
+     */
+    function enforceCanonical(caption, sheet) {
+        const text = String(caption || '');
+        const p = canonicalParts(sheet);
+        const hay = ' ' + text.toLowerCase().replace(/[^a-z0-9]+/g, ' ') + ' ';
+        const added = [];
+
+        const checkChunks = (blob, kind) => {
+            String(blob || '').split(/[,;]/).map((c) => c.trim()).filter(Boolean).forEach((chunk) => {
+                const words = chunk.toLowerCase().replace(/[^a-z0-9]+/g, ' ')
+                    .split(' ').filter((w) => w.length >= 4);
+                if (!words.length) return;
+                const hits = words.filter((w) => hay.indexOf(' ' + w + ' ') !== -1).length;
+                if (hits / words.length < 0.6) added.push({ kind, text: chunk });
+            });
+        };
+
+        checkChunks(p.description, 'traits');
+        // The outfit is only forced when the scene does not undress the character.
+        if (p.outfit && !NUDITY_RE.test(text)) checkChunks(p.outfit, 'outfit');
+
+        if (!added.length) return { text, added: [] };
+        return { text: text + ', ' + added.map((a) => a.text).join(', '), added };
     }
 
     function toast(kind, message) {
@@ -314,11 +418,33 @@
         <div id="csc_caption_wrap" class="csc-caption-wrap" hidden>
           <div class="csc-label csc-caption-label">Prompt used</div>
           <div id="csc_caption_preview" class="csc-caption-preview"></div>
-        </div>
+                    <div id="csc_canonical" class="csc-canonical" hidden></div>
+                  </div>
       </div>
 
-      <div class="csc-section">
-        <div class="csc-progress"><div id="csc_progress_fill" class="csc-progress-fill"></div></div>
+      <!-- CHARACTER COHERENCE ------------------------------------------- -->
+            <div class="csc-section">
+              <div class="csc-row csc-row-between">
+                <label class="csc-label" for="csc_sheet_desc">Character coherence<span id="csc_sheet_who" class="csc-muted csc-sheet-who"></span></label>
+                <button id="csc_sheet_clear" class="csc-linklike" title="Erase this character's sheet">⌫</button>
+              </div>
+              <textarea id="csc_sheet_desc" class="text_pole csc-input csc-sheet-desc" rows="2"
+                placeholder="age, face, hair, eyes, body, scars / tattoos / marks — e.g. 26 years old, long silver hair, green eyes, pale skin, small scar above the left eyebrow"></textarea>
+              <label class="csc-label csc-mt-sm" for="csc_sheet_outfit">Outfit (reused unless the scene changes clothes)</label>
+              <input id="csc_sheet_outfit" class="text_pole csc-input" type="text"
+                placeholder="black lace dress, red ribbon in the hair">
+              <div class="csc-row csc-row-between csc-mt-sm">
+                <label class="csc-check-row">
+                  <input id="csc_sheet_keep" type="checkbox">
+                  <span>Keep the same outfit between images</span>
+                </label>
+                <button id="csc_sheet_from_last" class="csc-linklike" title="Take the outfit of the last caption">↧ from last</button>
+              </div>
+              <div id="csc_sheet_state" class="csc-muted csc-sheet-state"></div>
+            </div>
+
+            <div class="csc-section">
+              <div class="csc-progress"><div id="csc_progress_fill" class="csc-progress-fill"></div></div>
         <div class="csc-row csc-row-between csc-progress-meta">
           <span id="csc_status_line" class="csc-status-line">idle</span>
           <span id="csc_progress_pct" class="csc-val">0%</span>
@@ -789,15 +915,46 @@
                     pill.hideTimer = setTimeout(() => hidePill(), 2500);
                 }
 
-    function showCaptionPreview(caption, via) {
-        ui.lastCaption = caption || '';
-        const wrap = $('csc_caption_wrap');
-        const prev = $('csc_caption_preview');
-        const viaEl = $('csc_caption_via');
-        if (prev) prev.textContent = caption || '(empty caption)';
-        if (wrap) wrap.hidden = !caption;
-        if (viaEl) viaEl.textContent = via ? ('via ' + via) : '';
-    }
+    function renderCanonicalNote() {
+            const canonEl = $('csc_canonical');
+            if (!canonEl) return;
+            const added = String(ui.captionCanonical || '').trim();
+            canonEl.textContent = added ? ('coherence re-injected: ' + added) : '';
+            canonEl.hidden = !added;
+        }
+
+        function showCaptionPreview(caption, via) {
+            ui.lastCaption = caption || '';
+            const wrap = $('csc_caption_wrap');
+            const prev = $('csc_caption_preview');
+            const viaEl = $('csc_caption_via');
+            if (prev) prev.textContent = caption || '(empty caption)';
+            if (wrap) wrap.hidden = !caption;
+            if (viaEl) viaEl.textContent = via ? ('via ' + via) : '';
+            renderCanonicalNote();
+        }
+
+        /** Draw the panel fields from the sheet of the character in this chat. */
+        function refreshSheetUi() {
+            const key = characterKey();
+            const sh = sheetOf(key);
+            const who = $('csc_sheet_who');
+            if (who) who.textContent = ' · ' + key;
+            const desc = $('csc_sheet_desc');
+            if (desc && document.activeElement !== desc) desc.value = sh.description || '';
+            const outfit = $('csc_sheet_outfit');
+            if (outfit && document.activeElement !== outfit) outfit.value = sh.outfit || '';
+            const keep = $('csc_sheet_keep');
+            if (keep) keep.checked = sh.keepOutfit !== false;
+            const state = $('csc_sheet_state');
+            if (state) {
+                const has = !!(String(sh.description || '').trim() || String(sh.outfit || '').trim());
+                state.textContent = has
+                    ? 'saved for this character — injected into every image prompt'
+                    : 'empty: the model will invent the look, fill it once.';
+            }
+            autoGrow(desc);
+        }
 
     /* ------------------------------------------------------------------ */
     /* Caption pipeline (LLM)                                              */
@@ -1019,7 +1176,8 @@
                         prompt: String(obj.prompt || obj.image_prompt || ''),
                         negative: String(obj.negative || obj.negative_prompt || ''),
                         scene: String(obj.scene || obj.summary || ''),
-                    };
+                                                outfit: String(obj.outfit || obj.clothing || obj.wearing || ''),
+                                            };
                 }
             } catch (err) { /* fall through to the field regexes */ }
         }
@@ -1028,8 +1186,10 @@
             return m ? m[1] : '';
         };
         const prompt = grab('prompt') || grab('image_prompt');
-        if (prompt) return { ok: true, prompt, negative: grab('negative'), scene: grab('scene') };
-        return { ok: false, prompt: '', negative: '', scene: '' };
+        if (prompt) {
+                    return { ok: true, prompt, negative: grab('negative'), scene: grab('scene'), outfit: grab('outfit') || grab('clothing') };
+                }
+                return { ok: false, prompt: '', negative: '', scene: '', outfit: '' };
     }
 
     function sanitizeCaption(raw) {
@@ -1102,24 +1262,43 @@ ${lastText}`
      * user's style suffix. This is the ONLY thing the primary button needs.
      */
     async function buildSceneCaption() {
-        const s = getSettings();
-        const scene = gatherSceneContext();
-        const { text, via } = await quietCaption(CAPTION_SYSTEM_PROMPT, scene.userPayload);
-        const parsed = parseCaptionJson(text);
-        const base = sanitizeCaption(parsed.ok ? parsed.prompt : text);
-        if (!base) throw new Error('The LLM returned no usable caption.');
-        const suffix = String(s.styleSuffix || '').trim();
-        ui.captionVia = via;
-        ui.captionNegative = sanitizeCaption(parsed.negative || '');
-        ui.captionScene = parsed.scene || '';
-        // Append the style suffix without repeating tags the caption already
-        // carries ("cinematic lighting" twice looks broken and costs tokens).
-        const have = new Set(base.toLowerCase().split(/[,;]/).map(t => t.trim()).filter(Boolean));
-        const extra = suffix
-            ? suffix.split(',').map(t => t.trim()).filter(t => t && !have.has(t.toLowerCase()))
-            : [];
-        return extra.length ? `${base}, ${extra.join(', ')}` : base;
-    }
+            const s = getSettings();
+            const scene = gatherSceneContext();
+            const sheet = currentSheet();
+            // The sheet rides INSIDE the system prompt so the model knows who it is
+            // drawing before it reads the scene.
+            const { text, via } = await quietCaption(captionSystemPrompt(), scene.userPayload);
+            const parsed = parseCaptionJson(text);
+            let base = sanitizeCaption(parsed.ok ? parsed.prompt : text);
+            if (!base) throw new Error('The LLM returned no usable caption.');
+
+            // Learn the outfit for the NEXT image (the wardrobe memory).
+            const learned = sanitizeCaption(parsed.outfit || '');
+                    ui.lastCaptionOutfit = learned;
+                    if (learned && sheet.keepOutfit !== false) {
+                sheet.outfit = learned;
+                refreshSheetUi();
+                saveSettings();
+            }
+
+            // Deterministic safety net: put back whatever the LLM dropped.
+            const enforced = enforceCanonical(base, sheet);
+                        base = enforced.text;
+                        ui.captionCanonical = enforced.added.map((a) => a.text).join(', ');
+                        renderCanonicalNote();
+
+            const suffix = String(s.styleSuffix || '').trim();
+            ui.captionVia = via;
+            ui.captionNegative = sanitizeCaption(parsed.negative || '');
+            ui.captionScene = parsed.scene || '';
+            // Append the style suffix without repeating tags the caption already
+            // carries ("cinematic lighting" twice looks broken and costs tokens).
+            const have = new Set(base.toLowerCase().split(/[,;]/).map(t => t.trim()).filter(Boolean));
+            const extra = suffix
+                ? suffix.split(',').map(t => t.trim()).filter(t => t && !have.has(t.toLowerCase()))
+                : [];
+            return extra.length ? `${base}, ${extra.join(', ')}` : base;
+        }
 
     /**
      * Secondary path: re-run ONLY the caption step (no render). Stores the
@@ -1431,9 +1610,13 @@ ${lastText}`
                         // filter, empty completion). Illustration must not die for that:
                         // fall back to the message text itself as the prompt.
                         const fromMessage = sanitizeCaption(scene.lastText);
-                        if (fromMessage) {
-                            caption = fromMessage;
-                            ui.captionVia = 'fallback: last message text';
+                                                if (fromMessage) {
+                                                    // Coherence also applies to the fallback: a dead LLM is
+                                                    // no reason to let the character change between images.
+                                                    const forced = enforceCanonical(fromMessage, currentSheet());
+                                                    caption = forced.text;
+                                                    ui.captionCanonical = forced.added.map((a) => a.text).join(', ');
+                                                    ui.captionVia = 'fallback: last message text';
                             ui.captionNegative = '';
                             setStatusLine('LLM gave no caption — using the message text');
                             toast('warning', 'No caption from the LLM (' + msg + ') — using the message text.');
@@ -2042,7 +2225,59 @@ ${lastText}`
                 const testLlm = $('csc_test_llm');
                 if (testLlm) testLlm.addEventListener('click', diagnoseLLM);
                 const testOverlay = $('csc_test_overlay');
-                if (testOverlay) testOverlay.addEventListener('click', pillDemo);
+                        if (testOverlay) testOverlay.addEventListener('click', pillDemo);
+
+                        // --- character sheet (coherence) -----------------------------------
+                        const sheetDesc = $('csc_sheet_desc');
+                        if (sheetDesc) {
+                            sheetDesc.addEventListener('input', () => {
+                                currentSheet().description = String(sheetDesc.value || '');
+                                saveSettings();
+                                autoGrow(sheetDesc);
+                                refreshSheetUi();
+                            });
+                        }
+                        const sheetOutfit = $('csc_sheet_outfit');
+                        if (sheetOutfit) {
+                            sheetOutfit.addEventListener('input', () => {
+                                currentSheet().outfit = String(sheetOutfit.value || '');
+                                saveSettings();
+                                refreshSheetUi();
+                            });
+                        }
+                        const sheetKeep = $('csc_sheet_keep');
+                        if (sheetKeep) {
+                            sheetKeep.addEventListener('change', () => {
+                                currentSheet().keepOutfit = !!sheetKeep.checked;
+                                saveSettings();
+                                refreshSheetUi();
+                            });
+                        }
+                        const sheetClear = $('csc_sheet_clear');
+                        if (sheetClear) {
+                            sheetClear.addEventListener('click', () => {
+                                const key = characterKey();
+                                const s = getSettings();
+                                if (s.sheets) delete s.sheets[key];
+                                saveSettings();
+                                refreshSheetUi();
+                                toast('info', 'Sheet cleared for ' + key);
+                            });
+                        }
+                        const sheetFromLast = $('csc_sheet_from_last');
+                        if (sheetFromLast) {
+                            sheetFromLast.addEventListener('click', () => {
+                                const txt = String(ui.lastCaptionOutfit || '').trim();
+                                if (!txt) {
+                                    toast('warning', 'No outfit captured yet — generate one image first.');
+                                    return;
+                                }
+                                currentSheet().outfit = txt;
+                                saveSettings();
+                                refreshSheetUi();
+                                toast('success', 'Outfit taken from the last caption.');
+                            });
+                        }
         const gen = $('csc_generate');
         if (gen) gen.addEventListener('click', generate);
         const intr = $('csc_interrupt');
@@ -2066,8 +2301,10 @@ ${lastText}`
         const event_types = ctx.eventTypes || ctx.event_types || {};
 
         const onChatChanged = () => {
-            refreshHistory().catch(() => {});
-        };
+                    refreshHistory().catch(() => {});
+                    // A different character means a different sheet.
+                    refreshSheetUi();
+                };
         const onMessage = () => {
             window.__csc_last_message_ts = Date.now();
         };
@@ -2098,7 +2335,8 @@ ${lastText}`
         autoGrow($('csc_prompt'));
         autoGrow($('csc_negative'));
         const meta = await refreshMeta();
-        if (meta) syncFormFromSettings();
+                if (meta) syncFormFromSettings();
+                refreshSheetUi();
         refreshHistory().catch(() => {});
     }
 
@@ -2128,8 +2366,14 @@ ${lastText}`
         generate,
         buildSceneCaption,
         quietCaption,
-        diagnoseLLM,
-        pillDemo,
+                diagnoseLLM,
+                pillDemo,
+                characterKey,
+                sheetOf,
+                currentSheet,
+                captionSystemPrompt,
+                enforceCanonical,
+                refreshSheetUi,
         sanitizeCaption,
         gatherSceneContext,
         attachImageToLastMessage,
