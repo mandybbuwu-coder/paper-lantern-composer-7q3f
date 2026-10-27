@@ -211,6 +211,13 @@ percentage, a progress bar, the step counter, and a ✕ that cancels the job.
 * During the **caption** step the bar sweeps, because no honest percentage exists yet.
 * **◉ show overlay** in the panel pins it for a few seconds to check it on your device.
 
+### Short prompt (v1.6.1)
+
+The instruction is 602 characters: illustrate the moment from the chat context,
+answer in one JSON object. No rules list, no "never invent", no sermon — the model
+is capable of reading the context. The context window and the previous image are
+still sent; the JSON schema and the repair pass are unchanged.
+
 ### Nothing about looks is hardcoded (v1.6)
 
 The extension does **not** define how anyone looks. No character sheet, no traits,
